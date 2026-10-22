@@ -5,13 +5,14 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "types": ["node"],
-    "rootDir": "electron",
+    "rootDir": ".",
     "outDir": "dist-electron",
+    "rewriteRelativeImportExtensions": true,
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true
   },
-  "include": ["electron"]
+  "include": ["electron", "server/index.ts", "server/execute.ts", "shared"]
 }
