@@ -18,6 +18,24 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 input::placeholder, textarea::placeholder { color: var(--muted); }
 input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; }
 svg { flex-shrink: 0; }
+.brand-mark,
+.workspace-brand,
+.startup-brand,
+.startup-eyebrow,
+.startup-page h1,
+.startup-intro,
+.startup-footnote,
+.about-brand,
+:is(.brand-mark, .workspace-brand, .startup-brand, .startup-eyebrow, .startup-page h1, .startup-intro, .startup-footnote, .about-brand) * {
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+.brand-mark img,
+.startup-brand img,
+.about-brand img {
+  -webkit-user-drag: none;
+}
 code, kbd, pre { font-family: var(--mono); }
 ::selection { background: #b9acff66; }
 ::-webkit-scrollbar { width: 6px; height: 6px; }

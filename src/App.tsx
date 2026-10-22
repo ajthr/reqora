@@ -13,6 +13,7 @@ import CollectionOverview from './components/CollectionOverview';
 import type { CollectionSection } from './components/CollectionOverview';
 import { closeRequestTab, formatBody, formatSize, getRequestCollection, getVariableScope, initialWorkspace, newDraft, parseWorkspace, prepareWorkspaceRequest, toCurl } from './lib/workspace';
 import type { Collection, Draft, Workspace } from './lib/workspace';
+import { brandingInteractionProps } from './lib/branding';
 
 const STORAGE_KEY = 'reqora.workspace.v1';
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
@@ -385,7 +386,7 @@ export default function App() {
 
   return <div className={`app-shell ${sidebarHidden ? 'sidebar-hidden' : ''}`}>
     <aside className="activity-rail" aria-label="Workspace navigation">
-      <div className="brand-mark"><img src={logo} alt="Reqora" /></div>
+      <div className="brand-mark" {...brandingInteractionProps}><img src={logo} alt="Reqora" draggable={false} /></div>
       <button title="Collections" aria-label="Collections" className={`rail-button ${sidebarTab === 'collections' ? 'active' : ''}`} onClick={() => { setSidebarTab('collections'); setSidebarHidden(false); setMobileSidebar(true); }}><Icon name="collection" size={21} /></button>
       <button title="History" aria-label="History" className={`rail-button ${sidebarTab === 'history' ? 'active' : ''}`} onClick={() => { setSidebarTab('history'); setSidebarHidden(false); setMobileSidebar(true); }}><Icon name="history" size={22} /></button>
       <button title="Global environment variables" aria-label="Global environment variables" className="rail-button" onClick={() => setModal('environment')}><Icon name="globe" size={21} /></button>
@@ -395,7 +396,7 @@ export default function App() {
     </aside>
     {mobileSidebar && <button className="sidebar-backdrop" aria-label="Close sidebar" onClick={() => setMobileSidebar(false)} />}
     <aside className={`sidebar ${mobileSidebar ? 'mobile-open' : ''}`}>
-      <div className="workspace-brand"><span>reqora<span className="brand-period">.</span></span><span className="version-badge">BETA</span></div>
+      <div className="workspace-brand" {...brandingInteractionProps}><span>reqora<span className="brand-period">.</span></span><span className="version-badge">BETA</span></div>
       <div className="workspace-switch"><div className="workspace-icon"><Icon name="layers" size={18} /></div><div><strong>My workspace</strong><span>Local · Personal</span></div><Icon name="lock" size={13} /></div>
       <label className="sidebar-search"><Icon name="search" size={15} /><input aria-label="Search requests" placeholder="Search requests..." value={search} onChange={event => setSearch(event.target.value)} /><kbd>⌕</kbd></label>
       <div className="sidebar-section-heading"><span>{sidebarTab === 'collections' ? 'YOUR COLLECTIONS' : 'RECENT REQUESTS'}</span><button className="icon-button" title={sidebarTab === 'collections' ? 'New collection' : 'Clear history'} onClick={() => {
@@ -544,7 +545,7 @@ export default function App() {
       <div className="modal-footer"><button className="button button-secondary" disabled={backend === 'checking'} onClick={() => void checkBackend()}>Check connection</button><button className="button button-primary" onClick={() => setModal(null)}>Done</button></div>
     </Modal>}
     {modal === 'about' && <Modal title="About Reqora" onClose={() => setModal(null)}>
-      <div className="about-brand"><img src={logo} alt="Reqora" /><div><strong>Reqora</strong><span>Version 0.1.0 · MIT License</span></div></div>
+      <div className="about-brand" {...brandingInteractionProps}><img src={logo} alt="Reqora" draggable={false} /><div><strong>Reqora</strong><span>Version 0.1.0 · MIT License</span></div></div>
       <p className="modal-description">A free, open-source REST client for exploring and testing APIs. One shared TypeScript workspace, in your browser and on your desktop.</p>
       <p className="modal-description">This early release includes request execution, collections, local history, environment variables, and workspace import/export.</p>
       <div className="modal-footer"><button className="button button-primary" onClick={() => setModal(null)}>Back to workspace</button></div>
