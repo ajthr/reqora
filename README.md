@@ -13,6 +13,8 @@ Reqora now has its first working REST workflow: a shared React and TypeScript wo
 ## Available now
 
 - A responsive workspace with request tabs, editable request names, and light/dark themes.
+- A startup page when no request tabs are open, with quick actions and saved requests. Closing the last tab returns here without creating another request.
+- Shared File, View, Request, and Help menus and an interactive status bar in both web and Electron. Electron's native application menu is removed.
 - GET, POST, PUT, PATCH, DELETE, HEAD, and OPTIONS requests over HTTP and HTTPS.
 - Query parameters, request headers, JSON/text/URL-encoded bodies, and basic/bearer authentication.
 - A shared environment with `{{variable}}` substitution in URLs, parameters, headers, authentication, and bodies.
@@ -23,6 +25,8 @@ Reqora now has its first working REST workflow: a shared React and TypeScript wo
 - Shared in-app dialogs for editing and destructive actions, with keyboard focus containment, Escape dismissal, and focus restoration.
 - Reqora workspace JSON import/export and POSIX-shell cURL command generation.
 - `Ctrl/Cmd + Enter` to send and `Ctrl/Cmd + S` to save.
+
+Use the sidebar rail to switch between collections and history. Those views are not duplicated as workspace tabs. Text and editor sizes have been increased throughout the interface for readability.
 
 Open **Get a post** in the sample collection and select **Send** to try the client. The sample requests use JSONPlaceholder and require internet access. Edit **Environment** to change the sample `base_url`, or enter your own absolute HTTP/HTTPS URL.
 

@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, Menu } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { createReqoraServer } from '../server/index.ts';
 
@@ -12,7 +12,6 @@ function createWindow(): void {
     title: 'Reqora',
     backgroundColor: '#ffffff',
     icon: fileURLToPath(new URL('../../assets/logo-full.png', import.meta.url)),
-    autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -34,6 +33,7 @@ function createWindow(): void {
 }
 
 async function startApp(): Promise<void> {
+  Menu.setApplicationMenu(null);
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     // A stable origin keeps the desktop workspace available across launches.

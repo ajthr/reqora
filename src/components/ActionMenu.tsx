@@ -10,9 +10,10 @@ export interface MenuAction {
   danger?: boolean;
   separator?: boolean;
   disabled?: boolean;
+  shortcut?: string;
 }
 
-export default function ActionMenu({ label, actions }: { label: string; actions: MenuAction[] }) {
+export default function ActionMenu({ label, actions, triggerLabel }: { label: string; actions: MenuAction[]; triggerLabel?: string }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 0 });
   const trigger = useRef<HTMLButtonElement>(null);
@@ -50,10 +51,10 @@ export default function ActionMenu({ label, actions }: { label: string; actions:
   }, [open]);
 
   return <>
-    <button ref={trigger} className={`icon-button item-menu-trigger ${open ? 'menu-open' : ''}`} aria-label={label} title={label} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined}
+    <button ref={trigger} className={`${triggerLabel ? 'app-menu-trigger' : 'icon-button item-menu-trigger'} ${open ? 'menu-open' : ''}`} aria-label={label} title={label} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined}
       onClick={() => { focusLast.current = false; setOpen(current => !current); }}
       onKeyDown={event => { if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); focusLast.current = event.key === 'ArrowUp'; setOpen(true); } }}>
-      <Icon name="more" size={17} />
+      {triggerLabel || <Icon name="more" size={17} />}
     </button>
     {open && createPortal(<div ref={menu} id={id} role="menu" aria-label={label} className="action-menu-popover" style={position}
       onKeyDown={event => {
@@ -63,6 +64,12 @@ export default function ActionMenu({ label, actions }: { label: string; actions:
           event.preventDefault();
           const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
           items[next]?.focus();
+        } else if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && triggerLabel) {
+          event.preventDefault();
+          const triggers = [...(trigger.current?.closest('[data-app-menu-bar]')?.querySelectorAll<HTMLButtonElement>('[aria-haspopup="menu"]') || [])];
+          const current = triggers.indexOf(trigger.current!);
+          const next = triggers[(current + (event.key === 'ArrowRight' ? 1 : -1) + triggers.length) % triggers.length];
+          setOpen(false); next?.focus(); next?.click();
         } else if (event.key === 'Escape' || event.key === 'Tab') {
           event.preventDefault(); event.stopPropagation(); setOpen(false); trigger.current?.focus();
         }
@@ -70,7 +77,7 @@ export default function ActionMenu({ label, actions }: { label: string; actions:
       {actions.map(action => <div key={action.label}>
         {action.separator && <div className="action-menu-separator" role="separator" />}
         <button role="menuitem" className={`action-menu-item ${action.danger ? 'danger' : ''}`} disabled={action.disabled} onClick={() => { trigger.current?.focus(); setOpen(false); action.onSelect(); }}>
-          <Icon name={action.icon} size={15} /><span>{action.label}</span>
+          <Icon name={action.icon} size={16} /><span>{action.label}</span>{action.shortcut && <kbd>{action.shortcut}</kbd>}
         </button>
       </div>)}
     </div>, document.body)}

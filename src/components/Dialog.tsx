@@ -74,6 +74,7 @@ export default function Dialog({ title, children, onClose, wide = false, descrip
       if (background) background.inert = wasInert || false;
       document.body.style.overflow = previousOverflow;
       if (previousFocus?.isConnected) previousFocus.focus();
+      else document.querySelector<HTMLElement>('.app-menu-trigger')?.focus();
     };
   }, []);
 

@@ -1,6 +1,18 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { initialWorkspace, interpolate, newDraft, newEntry, parseWorkspace, prepareRequest, toCurl } from '../src/lib/workspace.ts';
+import { closeRequestTab, initialWorkspace, interpolate, newDraft, newEntry, parseWorkspace, prepareRequest, toCurl } from '../src/lib/workspace.ts';
+
+test('closing the final request leaves an empty workspace for the startup page', () => {
+  const draft = newDraft();
+  assert.deepEqual(closeRequestTab([draft], draft.id, draft.id), { tabs: [], activeId: '' });
+});
+
+test('closing a tab preserves inactive selection and selects a neighbor for the active tab', () => {
+  const tabs = [newDraft(), newDraft(), newDraft()];
+  assert.equal(closeRequestTab(tabs, tabs[0].id, tabs[1].id).activeId, tabs[0].id);
+  assert.equal(closeRequestTab(tabs, tabs[1].id, tabs[1].id).activeId, tabs[2].id);
+  assert.equal(closeRequestTab(tabs, tabs[2].id, tabs[2].id).activeId, tabs[1].id);
+});
 
 test('resolves variables and preserves existing and repeated query parameters', () => {
   const draft = { ...newDraft(), url: '{{base_url}}/posts?tag=one', params: [newEntry('tag', 'two words'), { ...newEntry('skip', 'value'), enabled: false }] };

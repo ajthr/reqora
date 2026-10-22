@@ -28,6 +28,13 @@ export function newDraft(): Draft {
   return { id: crypto.randomUUID(), name: 'Untitled request', method: 'GET', url: '', params: [], headers: [], body: '', bodyType: 'none', authType: 'none', token: '', username: '', password: '', timeoutMs: 30000, followRedirects: true };
 }
 
+export function closeRequestTab(tabs: Draft[], activeId: string, closingId: string): { tabs: Draft[]; activeId: string } {
+  const index = tabs.findIndex(tab => tab.id === closingId);
+  if (index < 0) return { tabs, activeId };
+  const remaining = tabs.filter(tab => tab.id !== closingId);
+  return { tabs: remaining, activeId: activeId === closingId ? remaining[Math.min(index, remaining.length - 1)]?.id || '' : activeId };
+}
+
 export function initialWorkspace(): Workspace {
   const collectionId = 'getting-started';
   const get = { ...newDraft(), name: 'Get a post', url: '{{base_url}}/posts/1', headers: [newEntry('Accept', 'application/json')] };

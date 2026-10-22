@@ -8,7 +8,8 @@ import Modal, { ConfirmDialog } from './components/Dialog';
 import type { Confirmation } from './components/Dialog';
 import ActionMenu from './components/ActionMenu';
 import type { MenuAction } from './components/ActionMenu';
-import { formatBody, formatSize, initialWorkspace, newDraft, parseWorkspace, prepareRequest, toCurl } from './lib/workspace';
+import Startup from './components/Startup';
+import { closeRequestTab, formatBody, formatSize, initialWorkspace, newDraft, parseWorkspace, prepareRequest, toCurl } from './lib/workspace';
 import type { Collection, Draft, Workspace } from './lib/workspace';
 
 const STORAGE_KEY = 'reqora.workspace.v1';
@@ -33,8 +34,9 @@ function download(name: string, content: BlobPart, type: string) {
 
 export default function App() {
   const [workspace, setWorkspace] = useState(loadWorkspace);
-  const [tabs, setTabs] = useState<Draft[]>(() => [structuredClone(workspace.saved[0]?.request || newDraft())]);
-  const [activeId, setActiveId] = useState(tabs[0].id);
+  const [tabs, setTabs] = useState<Draft[]>([]);
+  const [activeId, setActiveId] = useState('');
+  const [emptyDraft] = useState(newDraft);
   const [editorTab, setEditorTab] = useState<EditorTab>('Params');
   const [responseTab, setResponseTab] = useState<'Body' | 'Headers'>('Body');
   const [pretty, setPretty] = useState(true);
@@ -43,7 +45,7 @@ export default function App() {
   const [sidebarTab, setSidebarTab] = useState<'collections' | 'history'>('collections');
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState<string[]>([]);
-  const [modal, setModal] = useState<'save' | 'collection' | 'environment' | 'curl' | 'import' | 'rename' | 'move' | null>(null);
+  const [modal, setModal] = useState<'save' | 'collection' | 'environment' | 'curl' | 'import' | 'rename' | 'move' | 'shortcuts' | 'about' | 'engine' | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [importText, setImportText] = useState('');
   const [pendingImport, setPendingImport] = useState<Workspace | null>(null);
@@ -59,9 +61,11 @@ export default function App() {
   const [storageError, setStorageError] = useState(false);
   const [backend, setBackend] = useState<'checking' | 'online' | 'offline'>('checking');
   const [mobileSidebar, setMobileSidebar] = useState(false);
+  const [sidebarHidden, setSidebarHidden] = useState(false);
   const [theme, setTheme] = useState(() => { try { return localStorage.getItem('reqora.theme') || 'light'; } catch { return 'light'; } });
   const controller = useRef<AbortController | null>(null);
-  const draft = tabs.find(tab => tab.id === activeId) || tabs[0];
+  const draft = tabs.find(tab => tab.id === activeId) || tabs[0] || emptyDraft;
+  const hasRequest = tabs.length > 0;
   const result = results[draft.id];
   const response = result?.response;
   const saved = workspace.saved.find(item => item.request.id === draft.id);
@@ -82,14 +86,18 @@ export default function App() {
   useEffect(() => { void checkBackend(); return () => controller.current?.abort(); }, []);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); if (!modal && !confirmation) saveRequest(); }
-      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !modal && !confirmation && !busyId) { event.preventDefault(); void sendRequest(); }
+      if (modal || confirmation) return;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); if (hasRequest) saveRequest(); }
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !busyId && hasRequest) { event.preventDefault(); void sendRequest(); }
+      const target = event.target as HTMLElement;
+      if (event.key === '?' && !target.closest('input, textarea, select, [contenteditable="true"]')) { event.preventDefault(); setModal('shortcuts'); }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   });
 
   async function checkBackend() {
+    setBackend('checking');
     try { const result = await fetch('/api/health', { signal: AbortSignal.timeout(5000) }); setBackend(result.ok ? 'online' : 'offline'); }
     catch { setBackend('offline'); }
   }
@@ -113,20 +121,21 @@ export default function App() {
 
   function closeTab(id: string, discard = false) {
     if (busyId === id) { setToast('Cancel the running request before closing its tab.'); return; }
-    const closing = tabs.find(tab => tab.id === id)!;
+    const closing = tabs.find(tab => tab.id === id);
+    if (!closing) return;
     const original = workspace.saved.find(item => item.request.id === id)?.request;
     if (!discard && (!original || JSON.stringify(closing) !== JSON.stringify(original)) && (closing.url || closing.body || closing.name !== 'Untitled request')) {
       setConfirmation({ title: 'Discard unsaved changes?', description: `“${closing.name}” has changes that have not been saved. Closing this tab will discard them.`, confirmLabel: 'Discard changes', onConfirm: () => closeTab(id, true) });
       return;
     }
-    const remaining = tabs.filter(tab => tab.id !== id);
-    if (!remaining.length) remaining.push(newDraft());
-    setTabs(remaining);
-    if (activeId === id) setActiveId(remaining[remaining.length - 1].id);
+    const next = closeRequestTab(tabs, activeId, id);
+    setTabs(next.tabs);
+    setActiveId(next.activeId);
     setResults(current => { const next = { ...current }; delete next[id]; return next; });
   }
 
   function persistRequest(name: string, targetCollection: string) {
+    if (!hasRequest) return;
     const request = { ...draft, name: name.trim() || 'Untitled request' };
     updateDraft({ name: request.name });
     setWorkspace(current => ({ ...current, saved: [...current.saved.filter(item => item.request.id !== request.id), { collectionId: targetCollection, request: structuredClone(request) }] }));
@@ -135,6 +144,7 @@ export default function App() {
   }
 
   function saveRequest() {
+    if (!hasRequest) return;
     if (saved) { persistRequest(draft.name, saved.collectionId); return; }
     setSaveName(draft.name);
     setCollectionId(workspace.collections[0]?.id || '');
@@ -142,7 +152,7 @@ export default function App() {
   }
 
   async function sendRequest() {
-    if (busyId || controller.current) return;
+    if (!hasRequest || busyId || controller.current) return;
     const id = draft.id;
     let request;
     try { request = prepareRequest(draft, workspace.variables); }
@@ -277,6 +287,58 @@ export default function App() {
     ];
   }
 
+  function openImport() {
+    setImportText(''); setPendingImport(null); setModal('import'); setMobileSidebar(false);
+  }
+
+  function exportWorkspace() {
+    download('reqora-workspace.json', JSON.stringify(workspace, null, 2), 'application/json');
+    setToast('Workspace exported. Keep it private if it contains credentials.');
+  }
+
+  function closeAllTabs(discard = false) {
+    if (busyId) { setToast('Cancel the running request before closing all tabs.'); return; }
+    const unsaved = tabs.some(tab => {
+      const original = workspace.saved.find(item => item.request.id === tab.id)?.request;
+      return (!original || JSON.stringify(original) !== JSON.stringify(tab)) && (tab.url || tab.body || tab.name !== 'Untitled request' || tab.headers.length || tab.params.length);
+    });
+    if (unsaved && !discard) {
+      setConfirmation({ title: 'Close all request tabs?', description: 'Unsaved changes in your open requests will be discarded. Saved collections and history will stay available.', confirmLabel: 'Discard and close all', onConfirm: () => closeAllTabs(true) });
+      return;
+    }
+    setTabs([]); setActiveId(''); setResults({});
+  }
+
+  const applicationMenus: { label: string; actions: MenuAction[] }[] = [
+    { label: 'File', actions: [
+      { label: 'New request', icon: 'plus', onSelect: addRequest },
+      { label: 'New collection', icon: 'folder', onSelect: () => { setCollectionName(''); setModal('collection'); } },
+      { label: 'Import workspace', icon: 'upload', onSelect: openImport, separator: true },
+      { label: 'Export workspace', icon: 'download', onSelect: exportWorkspace },
+      { label: 'Save request', icon: 'save', onSelect: saveRequest, disabled: !hasRequest, separator: true, shortcut: 'Ctrl/⌘ S' },
+      { label: 'Close request', icon: 'close', onSelect: () => closeTab(draft.id), disabled: !hasRequest || !!busyId },
+      { label: 'Close all requests', icon: 'close', onSelect: () => closeAllTabs(), disabled: !hasRequest || !!busyId },
+    ] },
+    { label: 'View', actions: [
+      { label: sidebarHidden ? 'Show sidebar' : 'Hide sidebar', icon: 'menu', onSelect: () => { setSidebarHidden(!sidebarHidden); setMobileSidebar(false); } },
+      { label: 'Light theme', icon: theme === 'light' ? 'check' : 'sun', onSelect: () => setTheme('light'), separator: true },
+      { label: 'Dark theme', icon: theme === 'dark' ? 'check' : 'moon', onSelect: () => setTheme('dark') },
+      { label: 'Environment variables', icon: 'globe', onSelect: () => setModal('environment'), separator: true },
+    ] },
+    { label: 'Request', actions: [
+      { label: 'Send request', icon: 'send', onSelect: () => void sendRequest(), disabled: !hasRequest || !!busyId, shortcut: 'Ctrl/⌘ ↵' },
+      { label: 'Cancel request', icon: 'close', onSelect: () => controller.current?.abort(), disabled: !busyId },
+      { label: 'Rename request', icon: 'edit', onSelect: () => renameItem('request', draft.id, draft.name), disabled: !hasRequest, separator: true },
+      { label: 'Duplicate request', icon: 'copy', onSelect: () => openRequest({ ...duplicateRequest(draft), name: `${draft.name} copy` }), disabled: !hasRequest },
+      { label: 'Generate cURL', icon: 'code', onSelect: () => setModal('curl'), disabled: !hasRequest, separator: true },
+    ] },
+    { label: 'Help', actions: [
+      { label: 'Keyboard shortcuts', icon: 'terminal', onSelect: () => setModal('shortcuts'), shortcut: '?' },
+      { label: 'Request engine status', icon: 'globe', onSelect: () => { void checkBackend(); setModal('engine'); } },
+      { label: 'About Reqora', icon: 'layers', onSelect: () => setModal('about'), separator: true },
+    ] },
+  ];
+
   function downloadResponse() {
     if (!response) return;
     const type = response.headers.find(header => header.name.toLowerCase() === 'content-type')?.value || 'application/octet-stream';
@@ -287,11 +349,11 @@ export default function App() {
   let curl = '';
   if (modal === 'curl') { try { curl = toCurl(prepareRequest(draft, workspace.variables)); } catch (error) { curl = (error as Error).message; } }
 
-  return <div className="app-shell">
+  return <div className={`app-shell ${sidebarHidden ? 'sidebar-hidden' : ''}`}>
     <aside className="activity-rail" aria-label="Workspace navigation">
       <div className="brand-mark"><img src={logo} alt="Reqora" /></div>
-      <button title="Collections" aria-label="Collections" className={`rail-button ${sidebarTab === 'collections' ? 'active' : ''}`} onClick={() => { setSidebarTab('collections'); setMobileSidebar(true); }}><Icon name="collection" size={21} /></button>
-      <button title="History" aria-label="History" className={`rail-button ${sidebarTab === 'history' ? 'active' : ''}`} onClick={() => { setSidebarTab('history'); setMobileSidebar(true); }}><Icon name="history" size={22} /></button>
+      <button title="Collections" aria-label="Collections" className={`rail-button ${sidebarTab === 'collections' ? 'active' : ''}`} onClick={() => { setSidebarTab('collections'); setSidebarHidden(false); setMobileSidebar(true); }}><Icon name="collection" size={21} /></button>
+      <button title="History" aria-label="History" className={`rail-button ${sidebarTab === 'history' ? 'active' : ''}`} onClick={() => { setSidebarTab('history'); setSidebarHidden(false); setMobileSidebar(true); }}><Icon name="history" size={22} /></button>
       <button title="Environment variables" aria-label="Environment variables" className="rail-button" onClick={() => setModal('environment')}><Icon name="globe" size={21} /></button>
       <div className="rail-spacer" />
       <button title={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`} aria-label="Toggle theme" className="rail-button" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}><Icon name={theme === 'light' ? 'moon' : 'sun'} size={20} /></button>
@@ -301,7 +363,6 @@ export default function App() {
     <aside className={`sidebar ${mobileSidebar ? 'mobile-open' : ''}`}>
       <div className="workspace-brand"><span>reqora<span className="brand-period">.</span></span><span className="version-badge">BETA</span></div>
       <div className="workspace-switch"><div className="workspace-icon"><Icon name="layers" size={18} /></div><div><strong>My workspace</strong><span>Local · Personal</span></div><Icon name="lock" size={13} /></div>
-      <div className="sidebar-tabs"><button className={sidebarTab === 'collections' ? 'selected' : ''} onClick={() => setSidebarTab('collections')}>Collections</button><button className={sidebarTab === 'history' ? 'selected' : ''} onClick={() => setSidebarTab('history')}>History</button></div>
       <label className="sidebar-search"><Icon name="search" size={15} /><input aria-label="Search requests" placeholder="Search requests..." value={search} onChange={event => setSearch(event.target.value)} /><kbd>⌕</kbd></label>
       <div className="sidebar-section-heading"><span>{sidebarTab === 'collections' ? 'YOUR COLLECTIONS' : 'RECENT REQUESTS'}</span><button className="icon-button" title={sidebarTab === 'collections' ? 'New collection' : 'Clear history'} onClick={() => {
         if (sidebarTab === 'collections') { setCollectionName(''); setModal('collection'); }
@@ -324,14 +385,18 @@ export default function App() {
           <div><span className={`method-label method-${item.request.method.toLowerCase()}`}>{item.request.method}</span><span>{item.request.name}</span><small className={item.status && item.status < 400 ? 'success-text' : 'error-text'}>{item.status || 'ERR'}</small></div><span className="history-time">{new Date(item.date).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}{item.durationMs !== undefined && ` · ${item.durationMs} ms`}</span>
         </button>)}{!workspace.history.length && <div className="sidebar-empty"><Icon name="history" size={28} /><p>A fresh start.</p><span>Sent requests will appear here.</span></div>}</>}
       </div>
-      <div className="sidebar-bottom"><div className="workspace-transfer"><button onClick={() => { setImportText(''); setPendingImport(null); setModal('import'); setMobileSidebar(false); }}><Icon name="upload" size={14} /> Import</button><button title="Export workspace, including saved credentials and variables" onClick={() => { download('reqora-workspace.json', JSON.stringify(workspace, null, 2), 'application/json'); setToast('Workspace exported. Keep it private if it contains credentials.'); }}><Icon name="download" size={14} /> Export</button></div><p><Icon name="lock" size={12} /> Your workspace stays on this device</p></div>
+      <div className="sidebar-bottom"><div className="workspace-transfer"><button onClick={openImport}><Icon name="upload" size={16} /> Import</button><button title="Export workspace, including saved credentials and variables" onClick={exportWorkspace}><Icon name="download" size={16} /> Export</button></div><p><Icon name="lock" size={13} /> Your workspace stays on this device</p></div>
     </aside>
 
     <main className="main-workspace">
-      <header className="topbar"><div className="topbar-title"><button className="icon-button mobile-menu" aria-label="Open sidebar" onClick={() => setMobileSidebar(true)}><Icon name="menu" /></button><Icon name="layers" size={16} /><span>My workspace</span><span className="slash">/</span><span className="muted">REST client</span></div><div className="topbar-actions"><span className="local-badge"><span className="status-dot" /> Local workspace</span><span className="topbar-divider" /><button className="environment-button" onClick={() => setModal('environment')}><Icon name="globe" size={15} /><span>Environment</span><span className="environment-count">{count(workspace.variables)}</span><Icon name="chevron" size={12} style={{ transform: 'rotate(90deg)' }} /></button></div></header>
-      <div className="request-tabs" role="tablist" aria-label="Open requests">{tabs.map(tab => <div className={`request-tab ${activeId === tab.id ? 'active' : ''}`} key={tab.id}><button role="tab" aria-selected={activeId === tab.id} onClick={() => setActiveId(tab.id)}><span className={`method-label method-${tab.method.toLowerCase()}`}>{tab.method}</span><span>{tab.name}</span>{(!workspace.saved.some(item => item.request.id === tab.id && JSON.stringify(item.request) === JSON.stringify(tab))) && <span className="unsaved-dot" title="Unsaved changes" />}</button><button className="tab-close" aria-label={`Close ${tab.name}`} onClick={() => closeTab(tab.id)}><Icon name="close" size={12} /></button></div>)}<button className="icon-button new-tab" aria-label="New request" title="New request" onClick={addRequest}><Icon name="plus" size={18} /></button></div>
+      <header className="topbar app-topbar">
+        <button className="icon-button mobile-menu" aria-label="Open sidebar" onClick={() => { setSidebarHidden(false); setMobileSidebar(true); }}><Icon name="menu" /></button>
+        <nav className="app-menu-bar" aria-label="Application menu" data-app-menu-bar>{applicationMenus.map(menu => <ActionMenu key={menu.label} label={`${menu.label} menu`} triggerLabel={menu.label} actions={menu.actions} />)}</nav>
+        <div className="topbar-actions"><span className="local-badge"><span className="status-dot" /> Local workspace</span><button className="environment-button" onClick={() => setModal('environment')}><Icon name="globe" size={17} /><span>Environment</span><span className="environment-count">{count(workspace.variables)}</span></button></div>
+      </header>
+      {hasRequest && <div className="request-tabs" role="tablist" aria-label="Open requests">{tabs.map(tab => <div className={`request-tab ${activeId === tab.id ? 'active' : ''}`} key={tab.id}><button role="tab" aria-selected={activeId === tab.id} onClick={() => setActiveId(tab.id)}><span className={`method-label method-${tab.method.toLowerCase()}`}>{tab.method}</span><span>{tab.name}</span>{(!workspace.saved.some(item => item.request.id === tab.id && JSON.stringify(item.request) === JSON.stringify(tab))) && <span className="unsaved-dot" title="Unsaved changes" />}</button><button className="tab-close" aria-label={`Close ${tab.name}`} onClick={() => closeTab(tab.id)}><Icon name="close" size={12} /></button></div>)}<button className="icon-button new-tab" aria-label="New request" title="New request" onClick={addRequest}><Icon name="plus" size={18} /></button></div>}
 
-      <div className="request-workspace">
+      {hasRequest ? <div className="request-workspace">
         <div className="request-heading"><div className="request-location"><Icon name="folder" size={16} /><span>{collection?.name || 'Scratchpad'}</span><Icon name="chevron" size={12} /><input aria-label="Request name" value={draft.name} onChange={event => updateDraft({ name: event.target.value })} /></div><div className="request-actions"><button className="text-button code-button" title="Generate cURL command" onClick={() => setModal('curl')}><Icon name="code" size={16} /> Code</button><button className="button button-secondary save-button" onClick={saveRequest}><Icon name="save" size={15} /> Save{dirty && <span className="unsaved-dot" />}</button></div></div>
         <form className="url-bar" onSubmit={event => { event.preventDefault(); void sendRequest(); }}>
           <div className="url-input-group"><select className={`method-select method-${draft.method.toLowerCase()}`} aria-label="HTTP method" value={draft.method} onChange={event => updateDraft({ method: event.target.value })}>{METHODS.map(method => <option key={method}>{method}</option>)}</select><div className="url-divider" /><input className="url-input" aria-label="Request URL" placeholder="Enter a URL or paste an endpoint" value={draft.url} onChange={event => updateDraft({ url: event.target.value })} spellCheck={false} autoComplete="off" /><span className="url-protocol"><Icon name="lock" size={14} /></span></div>
@@ -354,8 +419,11 @@ export default function App() {
             <div className="response-url" title={response.url}><Icon name="globe" size={11} />{response.url}</div>
           </> : <div className="response-empty"><div className="empty-art"><div className="empty-art-orbit orbit-one" /><div className="empty-art-orbit orbit-two" /><div className="empty-illustration"><Icon name="send" size={28} /></div><span className="art-spark spark-one" /><span className="art-spark spark-two" /></div><h2>A little curiosity. A new request.</h2><p>Enter an endpoint, make it yours, and hit Send.<br />Your response will land right here.</p><div className="shortcut-hint"><kbd>Ctrl</kbd><span>+</span><kbd>Enter</kbd><span>to send a request</span></div></div>}
         </section>
-      </div>
-      <footer className="statusbar"><span><Icon name="lock" size={11} />{storageError ? 'Storage unavailable — export your workspace to keep changes' : 'Stored locally. Built for your flow.'}</span><div><button onClick={() => void checkBackend()} title="Check backend connection"><span className={`status-dot ${backend === 'online' ? '' : 'offline'}`} />{backend === 'online' ? 'Request engine online' : backend === 'checking' ? 'Connecting…' : 'Request engine offline'}</button><span className="statusbar-version">Reqora v0.1.0</span></div></footer>
+      </div> : <Startup requests={workspace.saved.map(item => item.request)} onNew={addRequest} onOpen={openRequest} onImport={openImport} onCollection={() => { setCollectionName(''); setModal('collection'); }} onShortcuts={() => setModal('shortcuts')} />}
+      <footer className="statusbar app-statusbar" aria-label="Application status">
+        <div className="statusbar-left"><button className="engine-status" onClick={() => { void checkBackend(); setModal('engine'); }} title="Request engine details"><span className={`status-dot ${backend === 'online' ? '' : 'offline'}`} />{backend === 'online' ? 'Engine online' : backend === 'checking' ? 'Connecting…' : 'Engine offline'}</button><span className="storage-status"><Icon name="lock" size={13} />{storageError ? 'Storage unavailable' : 'Local workspace'}</span></div>
+        <div className="statusbar-right"><span className="request-status">{busyId ? 'Request in progress…' : hasRequest ? dirty ? 'Unsaved changes' : 'All changes saved' : 'Ready to create'}</span><button className="statusbar-environment" onClick={() => setModal('environment')}><Icon name="globe" size={14} />{count(workspace.variables)} variable{count(workspace.variables) === 1 ? '' : 's'}</button><button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} aria-label="Toggle theme"><Icon name={theme === 'light' ? 'moon' : 'sun'} size={14} /></button><button onClick={() => setModal('shortcuts')} title="Keyboard shortcuts"><Icon name="terminal" size={14} /></button></div>
+      </footer>
     </main>
 
     {toast && <div className="toast" role="status"><Icon name="check" size={17} /><span>{toast}</span><button className="icon-button" aria-label="Dismiss notification" onClick={() => setToast('')}><Icon name="close" size={14} /></button></div>}
@@ -419,6 +487,23 @@ export default function App() {
         {dialogError && <p className="dialog-error" role="alert">{dialogError}</p>}
         <div className="modal-footer"><button className="button button-secondary" onClick={() => setModal(null)}>Cancel</button><button className="button button-primary" onClick={() => reviewImport(importText)}>Review import</button></div>
       </>}
+    </Modal>}
+    {modal === 'shortcuts' && <Modal title="Keyboard shortcuts" onClose={() => setModal(null)}>
+      <p className="modal-description">A few useful ways to move through your workspace.</p>
+      <div className="shortcut-list"><div><span>Send the active request</span><kbd>Ctrl / ⌘ + Enter</kbd></div><div><span>Save the active request</span><kbd>Ctrl / ⌘ + S</kbd></div><div><span>Show keyboard shortcuts</span><kbd>?</kbd></div><div><span>Navigate a menu</span><kbd>↑ ↓ ← →</kbd></div><div><span>Move between controls</span><kbd>Tab / Shift + Tab</kbd></div><div><span>Close a menu or dialog</span><kbd>Esc</kbd></div></div>
+      <div className="modal-footer"><button className="button button-primary" onClick={() => setModal(null)}>Done</button></div>
+    </Modal>}
+    {modal === 'engine' && <Modal title="Request engine" onClose={() => setModal(null)}>
+      <div className="engine-health"><span className={`status-dot ${backend === 'online' ? '' : 'offline'}`} /><strong>{backend === 'online' ? 'Connected and ready' : backend === 'checking' ? 'Checking connection…' : 'Engine is unavailable'}</strong></div>
+      <p className="modal-description">Your requests are sent by the local Node.js engine, shared by the web and desktop apps.</p>
+      <dl className="engine-details"><div><dt>Protocols</dt><dd>HTTP and HTTPS</dd></div><div><dt>Request limit</dt><dd>1 MB</dd></div><div><dt>Response limit</dt><dd>5 MB</dd></div><div><dt>Timeout range</dt><dd>0.1–60 seconds</dd></div><div><dt>TLS certificates</dt><dd>Verified</dd></div></dl>
+      <div className="modal-footer"><button className="button button-secondary" disabled={backend === 'checking'} onClick={() => void checkBackend()}>Check connection</button><button className="button button-primary" onClick={() => setModal(null)}>Done</button></div>
+    </Modal>}
+    {modal === 'about' && <Modal title="About Reqora" onClose={() => setModal(null)}>
+      <div className="about-brand"><img src={logo} alt="Reqora" /><div><strong>Reqora</strong><span>Version 0.1.0 · MIT License</span></div></div>
+      <p className="modal-description">A free, open-source REST client for exploring and testing APIs. One shared TypeScript workspace, in your browser and on your desktop.</p>
+      <p className="modal-description">This early release includes request execution, collections, local history, environment variables, and workspace import/export.</p>
+      <div className="modal-footer"><button className="button button-primary" onClick={() => setModal(null)}>Back to workspace</button></div>
     </Modal>}
     {confirmation && <ConfirmDialog confirmation={confirmation} onClose={() => setConfirmation(null)} />}
   </div>;
