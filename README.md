@@ -8,7 +8,7 @@ A free, open-source REST client for building, testing, and debugging HTTP APIs. 
 
 ## Project status
 
-Reqora is in the planning stage. This repository currently contains project documentation, a license, and brand assets. No application code, installation process, or release is available yet. All capabilities below are planned.
+Reqora has a minimal application scaffold: a shared React and TypeScript UI built with Vite, an Electron desktop entry point, and a Docker image for the web app. Both interfaces currently display a blank white page. REST functionality and distributable desktop installers have not been implemented. All REST capabilities below are planned.
 
 ## Platforms and technology
 
@@ -69,7 +69,70 @@ The goal is comprehensive coverage of the REST workflows available in establishe
 
 ## Development
 
-Implementation has not started. The UI framework, package manager, repository layout, build tooling, and request transport architecture have not been selected. Development and contribution instructions will be added when those choices are made.
+### Run the web app with Docker
+
+Install Docker with the Compose plugin, then run from the repository root:
+
+```sh
+docker compose up --build -d
+```
+
+Open [http://localhost:5173](http://localhost:5173) to see the blank page. The first build downloads dependencies and requires internet access. Docker serves the compiled UI through Nginx; rebuild after source changes.
+
+To use a different host port:
+
+```sh
+REQORA_PORT=8080 docker compose up --build -d
+```
+
+To stop the app:
+
+```sh
+docker compose down
+```
+
+### Local web development
+
+Use Node.js 24 and npm:
+
+```sh
+npm ci
+npm run dev
+```
+
+Open [http://localhost:5173](http://localhost:5173). Vite reloads the shared UI when source files change.
+
+### Run the Electron desktop app
+
+On Windows, macOS, or Linux with a graphical desktop, install dependencies as above and run:
+
+```sh
+npm run desktop
+```
+
+This builds the shared UI and Electron main process, then opens a blank native window. Electron runs on the host; the Docker container serves the web app. Native packaging and installers will be added later.
+
+### Check and build
+
+```sh
+npm run typecheck
+npm run build
+```
+
+Web output is written to `dist/`; compiled Electron code is written to `dist-electron/`. The existing logo is used for the web favicon and desktop window icon where supported.
+
+### Project layout
+
+```text
+assets/                  Existing brand assets
+src/                     Shared React and TypeScript UI
+electron/main.ts         Electron window and app lifecycle
+docker/nginx.conf        Web container configuration
+Dockerfile               Web build and runtime image
+compose.yaml             Local Docker service
+```
+
+The request transport architecture remains a future design decision.
 
 ## Brand assets
 

@@ -1,0 +1,10 @@
+name: reqora
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${REQORA_PORT:-5173}:80"
+    restart: unless-stopped
