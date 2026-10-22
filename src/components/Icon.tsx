@@ -18,9 +18,14 @@ const paths = {
   moon: 'M21 13A9 9 0 0 1 11 3a9 9 0 1 0 10 10Z',
   sun: 'M12 3V1M12 23v-2M3 12H1M23 12h-2M4 4l2 2M18 18l2 2M4 20l2-2M18 6l2-2M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z',
   menu: 'M4 6h16M4 12h16M4 18h16', alert: 'M12 3 2 21h20L12 3ZM12 9v5M12 17v1',
+  more: 'M5 12h.01M12 12h.01M19 12h.01',
+  edit: 'm16 3 5 5M4 20l5-1L21 7l-4-4L5 15l-1 5Z',
+  move: 'M3 7V4h6l3 3h9v13H3V7ZM7 13h9m-3-3 3 3-3 3',
   layers: 'm12 3 10 5-10 5L2 8l10-5ZM2 12l10 5 10-5M2 16l10 5 10-5',
 } as const;
 
-export default function Icon({ name, size = 18, style, className = '' }: { name: keyof typeof paths; size?: number; style?: CSSProperties; className?: string }) {
+export type IconName = keyof typeof paths;
+
+export default function Icon({ name, size = 18, style, className = '' }: { name: IconName; size?: number; style?: CSSProperties; className?: string }) {
   return <svg className={className} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={style}><path d={paths[name]} /></svg>;
 }

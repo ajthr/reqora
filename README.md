@@ -19,12 +19,16 @@ Reqora now has its first working REST workflow: a shared React and TypeScript wo
 - A server-side request engine with cancellation, configurable timeouts, and optional redirect following.
 - Response status, elapsed time, decoded body size, headers, formatted JSON, raw text, copying, and downloads. Binary responses can be downloaded.
 - Named collections, saved requests, search, and the last 100 request attempts in local history.
+- Three-dot menus on requests and collections for renaming, duplication, export, and deletion; request menus also support moving between collections and copying cURL.
+- Shared in-app dialogs for editing and destructive actions, with keyboard focus containment, Escape dismissal, and focus restoration.
 - Reqora workspace JSON import/export and POSIX-shell cURL command generation.
 - `Ctrl/Cmd + Enter` to send and `Ctrl/Cmd + S` to save.
 
 Open **Get a post** in the sample collection and select **Send** to try the client. The sample requests use JSONPlaceholder and require internet access. Edit **Environment** to change the sample `base_url`, or enter your own absolute HTTP/HTTPS URL.
 
 Collections, saved request credentials, history, and environment values are stored in local browser storage without encryption. Workspace exports include those values. Web and desktop maintain separate local workspaces; use export/import to move between them. Save requests you want to keep before closing their tabs.
+
+To import a workspace, open **Import**, drag a Reqora JSON export into the custom dialog or paste its contents, then review and confirm replacement. Request and collection exports use the same workspace format and include environment values so variable references remain usable. Imports replace the saved workspace after confirmation; they do not merge into it.
 
 ## Platforms and technology
 
@@ -81,7 +85,7 @@ The goal is comprehensive coverage of the REST workflows available in establishe
 
 - Keyboard shortcuts, accessible navigation, and light and dark themes.
 - A consistent editing and testing experience across the web and desktop apps.
-- Clear handling of browser restrictions, including CORS and access to local services. Browser request execution and any companion transport remain design decisions.
+- Access to local services and HTTP execution outside browser CORS restrictions, with additional transport controls planned.
 
 ## Development
 

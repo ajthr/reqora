@@ -77,8 +77,12 @@ code, kbd, pre { font-family: var(--mono); }
 .saved-request:hover { background: var(--hover); }
 .saved-request.active { background: var(--accent-soft); color: var(--accent); }
 .saved-request.active::before { position: absolute; content: ''; left: -8px; width: 2px; height: 16px; border-radius: 2px; background: var(--accent); }
-.delete-saved { display: none; width: 21px; height: 24px; margin-right: 3px; }
-.saved-request:hover .delete-saved, .saved-request:focus-within .delete-saved { display: inline-flex; }
+.collection-row { display: flex; align-items: center; border-radius: 5px; }
+.collection-row:hover { background: var(--hover); }
+.collection-row .collection-heading { flex: 1; min-width: 0; width: auto; }
+.item-menu-trigger { width: 24px; height: 25px; margin-right: 3px; color: var(--muted); }
+.item-menu-trigger:hover, .item-menu-trigger.menu-open { background: var(--accent-soft); color: var(--accent); }
+.saved-request > button:first-child { flex: 1; min-width: 0; width: auto; }
 .method-label { font-size: 8px; font-weight: 750; font-family: var(--mono); flex-shrink: 0; width: 34px; letter-spacing: -.1px; color: var(--secondary); }
 .method-get, .method-head { color: var(--green); }
 .method-post { color: var(--orange); }
@@ -263,7 +267,27 @@ code, kbd, pre { font-family: var(--mono); }
 /* Dialogs and feedback */
 .modal { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 25px 90px #10152f30; width: 430px; max-width: calc(100vw - 32px); padding: 24px; max-height: 85dvh; overflow: auto; }
 .modal.wide { width: 640px; }
-.modal::backdrop { background: #10142666; backdrop-filter: blur(3px); }
+.dialog-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 16px; background: #10142666; backdrop-filter: blur(3px); }
+.button-danger { background: #c54760; color: #fff; }
+.button-danger:hover { background: #ae3650; }
+.dialog-error { font-size: 11px; line-height: 1.8; color: var(--red); padding: 9px 12px; border: 1px solid #da5d7926; border-radius: 5px; background: #da5d7910; }
+.import-drop-zone { display: grid; justify-items: center; gap: 11px; text-align: center; padding: 28px 16px; margin-bottom: 22px; border: 1px dashed #b3a7d8; border-radius: 8px; background: var(--accent-soft); color: var(--accent); }
+.import-drop-zone strong { font-size: 12px; font-weight: 550; }
+.import-drop-zone span { font-size: 10px; color: var(--secondary); }
+.import-drop-zone.dragging { border: 2px solid var(--accent); padding: 27px 15px; box-shadow: 0 0 0 4px #8575e815; }
+.import-json { width: 100%; min-height: 120px; padding: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 6px; font: 10px/1.8 var(--mono); resize: vertical; }
+.import-summary { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--border); border-radius: 8px; background: var(--surface); margin-top: 20px; }
+.import-summary > div { display: grid; gap: 7px; text-align: center; padding: 20px 10px; }
+.import-summary > div + div { border-left: 1px solid var(--border); }
+.import-summary strong { color: var(--accent); font-size: 22px; font-weight: 550; }
+.import-summary span { font-size: 10px; color: var(--secondary); }
+.action-menu-popover { position: fixed; z-index: 700; width: 210px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow: auto; padding: 5px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); box-shadow: 0 8px 35px #161b3424, 0 2px 6px #161b3408; }
+.action-menu-item { display: flex; align-items: center; gap: 9px; font-size: 11px; padding: 9px; text-align: left; border-radius: 4px; width: 100%; color: var(--secondary); }
+.action-menu-item:hover, .action-menu-item:focus { background: var(--accent-soft); color: var(--accent); outline: none; }
+.action-menu-item.danger { color: var(--red); }
+.action-menu-item.danger:hover, .action-menu-item.danger:focus { background: #da5d7910; }
+.action-menu-item:disabled { opacity: .45; background: none; color: var(--muted); }
+.action-menu-separator { height: 1px; background: var(--border); margin: 5px 4px; }
 .modal-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
 .modal-heading h2 { font-size: 17px; font-weight: 600; letter-spacing: -.5px; margin: 0; }
 .modal-description { font-size: 11px; line-height: 1.9; color: var(--secondary); margin: -5px 0 22px; }
