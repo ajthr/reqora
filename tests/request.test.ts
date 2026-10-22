@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createReqoraServer } from '../server/index.ts';
 import { executeRequest, MAX_RESPONSE_BYTES, RequestError, validateRequest } from '../server/execute.ts';
+import { initialWorkspace, newDraft, newEntry, prepareWorkspaceRequest } from '../src/lib/workspace.ts';
 
 async function listen(server: Server): Promise<string> {
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -113,6 +114,22 @@ test('API rejects oversized requests with a JSON error', async () => {
   const response = await fetch(apiUrl + '/api/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: 'x'.repeat(1024 * 1024) }) });
   assert.equal(response.status, 413);
   assert.match((await response.json() as { error: string }).error, /1 MB/);
+});
+
+test('collection variables resolve before a request is forwarded through the API', async () => {
+  const workspace = initialWorkspace();
+  workspace.variables = [newEntry('base_url', 'https://unreachable.invalid'), newEntry('scope', 'global')];
+  const collection = workspace.collections[0];
+  collection.variables = [newEntry('base_url', fixtureUrl), newEntry('scope', 'collection')];
+  const request = { ...newDraft(collection.id), method: 'POST', url: '{{base_url}}/echo', params: [newEntry('source', '{{scope}}')], headers: [newEntry('X-Scope', '{{scope}}')], bodyType: 'json' as const, body: '{"scope":"{{scope}}"}' };
+  const response = await fetch(apiUrl + '/api/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(prepareWorkspaceRequest(workspace, request)) });
+  assert.equal(response.status, 200);
+  const result = await response.json() as { status: number; body: string };
+  assert.equal(result.status, 200);
+  const echo = JSON.parse(result.body);
+  assert.equal(echo.url, '/echo?source=collection');
+  assert.equal(echo.headers['x-scope'], 'collection');
+  assert.equal(echo.body, '{"scope":"collection"}');
 });
 
 test('disconnecting from the API cancels the upstream request', async () => {

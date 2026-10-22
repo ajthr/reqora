@@ -17,7 +17,8 @@ Reqora now has its first working REST workflow: a shared React and TypeScript wo
 - Shared File, View, Request, and Help menus and an interactive status bar in both web and Electron. Electron's native application menu is removed.
 - GET, POST, PUT, PATCH, DELETE, HEAD, and OPTIONS requests over HTTP and HTTPS.
 - Query parameters, request headers, JSON/text/URL-encoded bodies, and basic/bearer authentication.
-- A shared environment with `{{variable}}` substitution in URLs, parameters, headers, authentication, and bodies.
+- Global environment and per-collection variables with `{{variable}}` substitution in URLs, parameters, headers, authentication, and bodies. Collection values take priority over globals, including in generated cURL.
+- Collection overview pages with descriptions, request lists, variable editors, and a resolved-value table showing the source of each effective variable.
 - A server-side request engine with cancellation, configurable timeouts, and optional redirect following.
 - Response status, elapsed time, decoded body size, headers, formatted JSON, raw text, copying, and downloads. Binary responses can be downloaded.
 - Named collections, saved requests, search, and the last 100 request attempts in local history.
@@ -28,7 +29,21 @@ Reqora now has its first working REST workflow: a shared React and TypeScript wo
 
 Use the sidebar rail to switch between collections and history. Those views are not duplicated as workspace tabs. Text and editor sizes have been increased throughout the interface for readability.
 
-Open **Get a post** in the sample collection and select **Send** to try the client. The sample requests use JSONPlaceholder and require internet access. Edit **Environment** to change the sample `base_url`, or enter your own absolute HTTP/HTTPS URL.
+Open **Get a post** in the sample collection and select **Send** to try the client. The sample requests use JSONPlaceholder and require internet access. Edit **Global variables** to change the shared `base_url`, or override it for an individual collection.
+
+### Collections and variable hierarchy
+
+Select a collection's name in the sidebar to open its overview. The arrow beside the name independently expands or collapses its requests. The overview provides an automatically saved description and a searchable request list. Its **Variables** section edits collection values and shows effective values with their source. The collection's three-dot menu also opens its overview or variables directly.
+
+Variable priority, from highest to lowest, is **collection → global environment**. Unsaved requests created within a collection use that collection's variables; scratch requests use globals. Moving a saved request changes its scope to the destination collection. History replays retain the originating collection context when available.
+
+- Only enabled, non-empty variable names participate. An unchecked collection variable falls back to the global value.
+- An enabled empty string intentionally overrides the global value.
+- Names are trimmed and case-sensitive. If a name repeats in a scope, the last enabled row wins.
+- Values can reference other variables, for example global `base_url = https://{{host}}/v1` with a collection-specific `host` override. Resolution uses the final effective scope and reports missing references, cycles, excessive nesting, or expanded values over 1 MB.
+- Workspace/request/collection exports preserve collection variables and descriptions. Duplicating a collection copies its variables independently. Older workspace files migrate with empty collection variables and descriptions.
+
+Close collection and request tabs to return to the startup page. Closing an overview preserves its automatically saved settings.
 
 Collections, saved request credentials, history, and environment values are stored in local browser storage without encryption. Workspace exports include those values. Web and desktop maintain separate local workspaces; use export/import to move between them. Save requests you want to keep before closing their tabs.
 
