@@ -1,5 +1,7 @@
 import { newAuthConfig, isAuthConfig, effectiveAuth, resolveAuthValues } from './auth.ts';
 import type { AuthConfig, AuthType } from './auth.ts';
+import { isCookieJar, isNetworkSettings, newNetworkSettings, normalizedNetworkSettings } from './network.ts';
+import type { CookieRecord, NetworkSettings } from './network.ts';
 import type { HttpRequest, HttpResponse, MultipartPart, UploadFile } from './types.ts';
 import { emptyAutomation, isAutomation, isScriptSettings } from './automation.ts';
 import type { RequestAutomation, ScriptSettings } from './automation.ts';
@@ -27,16 +29,17 @@ export interface Draft extends RequestAutomation, AuthConfig {
   password: string;
   timeoutMs: number;
   followRedirects: boolean;
+  network: NetworkSettings;
 }
 export interface SavedRequest { collectionId: string; request: Draft }
 export interface Collection extends Partial<ScriptSettings> { id: string; name: string; description: string; variables: Entry[]; auth?: AuthConfig }
 export interface HistoryItem { id: string; date: string; request: Draft; status?: number; durationMs?: number; error?: string }
-export interface Workspace { version: 1; collections: Collection[]; saved: SavedRequest[]; history: HistoryItem[]; variables: Entry[] }
+export interface Workspace { version: 1; collections: Collection[]; saved: SavedRequest[]; history: HistoryItem[]; variables: Entry[]; cookies: CookieRecord[] }
 
 export const newEntry = (name = '', value = ''): Entry => ({ id: crypto.randomUUID(), enabled: true, name, value });
 
 export function newDraft(collectionId?: string): Draft {
-  return { ...newAuthConfig('inherit'), ...emptyAutomation(), id: crypto.randomUUID(), ...(collectionId ? { collectionId } : {}), name: 'Untitled request', method: 'GET', url: '', params: [], headers: [], body: '', bodyType: 'none', formFields: [], multipartFields: [], timeoutMs: 30000, followRedirects: true };
+  return { ...newAuthConfig('inherit'), ...emptyAutomation(), id: crypto.randomUUID(), ...(collectionId ? { collectionId } : {}), name: 'Untitled request', method: 'GET', url: '', params: [], headers: [], body: '', bodyType: 'none', formFields: [], multipartFields: [], timeoutMs: 30000, followRedirects: true, network: newNetworkSettings() };
 }
 
 export function closeRequestTab(tabs: Draft[], activeId: string, closingId: string): { tabs: Draft[]; activeId: string } {
@@ -50,7 +53,7 @@ export function initialWorkspace(): Workspace {
   const collectionId = 'getting-started';
   const get = { ...newDraft(), name: 'Get a post', url: '{{base_url}}/posts/1', headers: [newEntry('Accept', 'application/json')] };
   const create: Draft = { ...newDraft(), name: 'Create a post', method: 'POST', url: '{{base_url}}/posts', bodyType: 'json', body: '{\n  "title": "Hello from Reqora",\n  "body": "Your next great API starts here.",\n  "userId": 1\n}' };
-  return { version: 1, collections: [{ id: collectionId, name: 'Getting started', description: 'A couple of sample requests to help you explore Reqora. Add collection variables to customize these requests without changing your global environment.', variables: [] }], saved: [{ collectionId, request: get }, { collectionId, request: create }], history: [], variables: [newEntry('base_url', 'https://jsonplaceholder.typicode.com')] };
+  return { version: 1, collections: [{ id: collectionId, name: 'Getting started', description: 'A couple of sample requests to help you explore Reqora. Add collection variables to customize these requests without changing your global environment.', variables: [] }], saved: [{ collectionId, request: get }, { collectionId, request: create }], history: [], variables: [newEntry('base_url', 'https://jsonplaceholder.typicode.com')], cookies: [] };
 }
 
 export interface ScopedVariable extends Entry { scope: 'global' | 'collection' }
@@ -72,7 +75,7 @@ export function getRequestCollection(workspace: Workspace, request: Draft): Coll
 }
 
 export function prepareWorkspaceRequest(workspace: Workspace, request: Draft, files?: ReadonlyMap<string, string>): HttpRequest {
-  return prepareRequest(request, workspace.variables, getRequestCollection(workspace, request)?.variables, files, getRequestCollection(workspace, request)?.auth);
+  return { ...prepareRequest(request, workspace.variables, getRequestCollection(workspace, request)?.variables, files, getRequestCollection(workspace, request)?.auth), ...(normalizedNetworkSettings(request.network).useCookies ? { cookies: workspace.cookies } : {}) };
 }
 
 export function requestFiles(request: Draft): FileReference[] {
@@ -177,7 +180,11 @@ export function prepareRequest(draft: Draft, variables: Entry[], collectionVaria
       }
     }
   }
-  return { url: url.href, method: draft.method, headers, body, timeoutMs: draft.timeoutMs, followRedirects: draft.followRedirects, ...(auth.authType !== 'none' ? { auth } : {}) };
+  const network = normalizedNetworkSettings(draft.network);
+  return { url: url.href, method: draft.method, headers, body, timeoutMs: draft.timeoutMs, followRedirects: draft.followRedirects, network: {
+    ...network, proxy: { ...network.proxy, ...(network.proxy.mode === 'custom' ? { url: resolve(network.proxy.url), bypass: resolve(network.proxy.bypass) } : {}) },
+    tls: { caPem: resolve(network.tls.caPem), clientCertPem: resolve(network.tls.clientCertPem), clientKeyPem: resolve(network.tls.clientKeyPem), clientKeyPassphrase: resolve(network.tls.clientKeyPassphrase) },
+  }, ...(auth.authType !== 'none' ? { auth } : {}) };
 }
 
 export function formatBody(response: HttpResponse, pretty: boolean): string {
@@ -208,7 +215,7 @@ function isMultipartField(value: unknown): value is MultipartField {
 }
 
 function normalizeDraft(draft: Draft): Draft {
-  return { ...newAuthConfig(), ...emptyAutomation(), ...draft,
+  return { ...newAuthConfig(), ...emptyAutomation(), ...draft, network: normalizedNetworkSettings(draft.network),
     formFields: draft.formFields ?? (draft.bodyType === 'form' ? [...new URLSearchParams(draft.body)].map(([name, value]) => newEntry(name, value)) : []),
     multipartFields: draft.multipartFields ?? [],
   };
@@ -219,7 +226,7 @@ export function isDraft(value: unknown): value is Draft {
   const draft = value as Draft;
   return ['id', 'name', 'method', 'url', 'body', 'token', 'username', 'password'].every(key => typeof draft[key as keyof Draft] === 'string')
     && Array.isArray(draft.params) && draft.params.every(isEntry) && Array.isArray(draft.headers) && draft.headers.every(isEntry)
-    && ['none', 'json', 'text', 'xml', 'form', 'multipart', 'binary'].includes(draft.bodyType) && isAuthConfig(draft)
+    && ['none', 'json', 'text', 'xml', 'form', 'multipart', 'binary'].includes(draft.bodyType) && isAuthConfig(draft) && (draft.network === undefined || isNetworkSettings(draft.network))
     && (draft.formFields === undefined || Array.isArray(draft.formFields) && draft.formFields.every(isEntry))
     && (draft.multipartFields === undefined || Array.isArray(draft.multipartFields) && draft.multipartFields.every(isMultipartField))
     && (draft.binaryFile === undefined || isFileReference(draft.binaryFile))
@@ -233,12 +240,12 @@ export function parseWorkspace(text: string): Workspace {
   if (data?.version !== 1 || !Array.isArray(data.collections) || !data.collections.every(item => typeof item?.id === 'string' && typeof item?.name === 'string' && isScriptSettings(item) && (item.auth === undefined || isAuthConfig(item.auth, false))
       && (item.description === undefined || typeof item.description === 'string') && (item.variables === undefined || Array.isArray(item.variables) && item.variables.every(isEntry)))
     || !Array.isArray(data.saved) || !data.saved.every(item => typeof item?.collectionId === 'string' && data.collections.some(collection => collection.id === item.collectionId) && isDraft(item?.request))
-    || !Array.isArray(data.variables) || !data.variables.every(isEntry)
+    || !Array.isArray(data.variables) || !data.variables.every(isEntry) || (data.cookies !== undefined && !isCookieJar(data.cookies))
     || !Array.isArray(data.history) || !data.history.every(item => typeof item?.id === 'string' && typeof item?.date === 'string' && isDraft(item?.request)
       && (item.status === undefined || typeof item.status === 'number') && (item.durationMs === undefined || typeof item.durationMs === 'number') && (item.error === undefined || typeof item.error === 'string'))) {
     throw new Error('This file is not a valid Reqora workspace export.');
   }
-  return { ...data, collections: data.collections.map(item => ({ ...item, description: item.description ?? '', variables: item.variables ?? [] })),
+  return { ...data, cookies: data.cookies ?? [], collections: data.collections.map(item => ({ ...item, description: item.description ?? '', variables: item.variables ?? [] })),
     saved: data.saved.map(item => ({ ...item, request: normalizeDraft(item.request) })),
     history: data.history.slice(0, 100).map(item => ({ ...item, request: normalizeDraft(item.request) })),
   };
@@ -249,6 +256,8 @@ export function toCurl(request: HttpRequest): string {
   const formQuote = (value: string) => `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
   const body = request.body;
   const auth = request.auth;
+  const network = normalizedNetworkSettings(request.network);
+  if (network.tls.caPem || network.tls.clientCertPem || network.tls.clientKeyPem) throw new Error('cURL needs certificate files on disk. Send this request in Reqora, or save PEM fields to files and configure cURL manually.');
   if (auth?.authType === 'oauth1' && !request.headers.some(header => header.name.toLowerCase() === 'authorization' && header.value.startsWith('OAuth '))) throw new Error('OAuth 1 cURL signing requires the running request engine. Use the Generate code action.');
   if (auth?.authType === 'oauth2' && !auth.oauth2?.accessToken) throw new Error('Get an OAuth 2 access token before exporting a cURL command.');
   if (auth?.authType === 'oauth2' && auth.oauth2!.expiresAt > 0 && auth.oauth2!.expiresAt <= Date.now()) throw new Error('Refresh the OAuth 2 access token before exporting cURL.');
@@ -256,6 +265,8 @@ export function toCurl(request: HttpRequest): string {
   if (auth?.authType === 'digest' && auth.username?.includes(':')) throw new Error('cURL Digest export does not support a colon in the username. Send this request from Reqora instead.');
   const authentication = auth?.authType === 'digest' ? [`  --digest --user ${quote(`${auth.username || ''}:${auth.password || ''}`)}`]
     : auth?.authType === 'aws' ? [`  --aws-sigv4 ${quote(`aws:amz:${auth.aws!.region}:${auth.aws!.service}`)}`, `  --user ${quote(`${auth.aws!.accessKeyId}:${auth.aws!.secretAccessKey}`)}`, ...(auth.aws!.sessionToken ? [`  --header ${quote(`X-Amz-Security-Token: ${auth.aws!.sessionToken}`)}`] : [])] : [];
+  const proxy = network.proxy.mode === 'custom' ? [`  --proxy ${quote(network.proxy.url)}`, ...(network.proxy.bypass ? [`  --noproxy ${quote(network.proxy.bypass)}`] : [])]
+    : network.proxy.mode === 'direct' ? ["  --noproxy '*'"] : [];
   if (typeof body === 'object' && body.kind === 'multipart' && body.parts.some(part => /[=\r\n\0]/.test(part.name))) {
     throw new Error('cURL form export does not support keys containing equals signs or line breaks. Send this request from Reqora instead.');
   }
@@ -265,5 +276,5 @@ export function toCurl(request: HttpRequest): string {
       // Quoting a per-part header prevents MIME parameters from becoming cURL form directives.
       ? `  --form ${quote(`${part.name}=@${formQuote(`./${part.file.name}`)};headers=${formQuote(`Content-Type: ${part.file.type || 'application/octet-stream'}`)}`)}`
       : `  --form-string ${quote(`${part.name}=${part.value}`)}`);
-  return [`curl --request ${quote(request.method)} ${quote(request.url)}`, ...authentication, ...request.headers.filter(header => auth?.authType === 'aws' ? !['authorization', 'x-amz-date', 'x-amz-content-sha256', 'x-amz-security-token'].includes(header.name.toLowerCase()) : auth?.authType !== 'digest' || header.name.toLowerCase() !== 'authorization').filter(header => typeof body === 'string' || body?.kind !== 'multipart' || header.name.toLowerCase() !== 'content-type').map(header => `  --header ${quote(`${header.name}: ${header.value}`)}`), ...flags, ...(request.followRedirects ? ['  --location'] : []), `  --max-time ${request.timeoutMs / 1000}`].join(' \\\n');
+  return [`curl --request ${quote(request.method)} ${quote(request.url)}`, ...authentication, ...proxy, ...request.headers.filter(header => auth?.authType === 'aws' ? !['authorization', 'x-amz-date', 'x-amz-content-sha256', 'x-amz-security-token'].includes(header.name.toLowerCase()) : auth?.authType !== 'digest' || header.name.toLowerCase() !== 'authorization').filter(header => typeof body === 'string' || body?.kind !== 'multipart' || header.name.toLowerCase() !== 'content-type').map(header => `  --header ${quote(`${header.name}: ${header.value}`)}`), ...flags, ...(request.followRedirects ? ['  --location'] : []), `  --max-time ${request.timeoutMs / 1000}`].join(' \\\n');
 }

@@ -1,6 +1,7 @@
 import type { HttpResponse } from './types.ts';
 import type { Collection, Draft, Entry } from './workspace.ts';
 import type { AuthenticationUpdate } from './auth.ts';
+import type { CookieRecord } from './network.ts';
 
 export const MAX_SCRIPT_LENGTH = 32_768;
 export const MAX_CHECKS = 100;
@@ -16,8 +17,8 @@ export interface ScriptSettings { preRequestScript: string; postResponseScript: 
 export interface RequestAutomation extends ScriptSettings { assertions: Assertion[]; extractions: Extraction[] }
 export interface CheckResult { name: string; passed: boolean; kind: 'script' | 'assertion' | 'extraction'; error?: string; phase?: string }
 export interface ScriptLog { level: 'log' | 'warn' | 'error'; message: string; phase: string }
-export interface ExecutionInput { request: Draft; globals: Entry[]; collection?: Collection; data?: DataRow; files?: Record<string, string>; iteration?: number }
-export interface ExecutionResult { response?: HttpResponse; error?: string; tests: CheckResult[]; logs: ScriptLog[]; changes: VariableChange[]; passed: boolean; authUpdates?: AuthenticationUpdate[] }
+export interface ExecutionInput { request: Draft; globals: Entry[]; collection?: Collection; data?: DataRow; files?: Record<string, string>; iteration?: number; cookies?: CookieRecord[] }
+export interface ExecutionResult { response?: HttpResponse; error?: string; tests: CheckResult[]; logs: ScriptLog[]; changes: VariableChange[]; passed: boolean; authUpdates?: AuthenticationUpdate[]; cookies?: CookieRecord[] }
 export interface RunnerOptions { iterations: number; delayMs: number; stopOnFailure: boolean; data: DataRow[]; requestIds?: string[] }
 export interface RunItem {
   requestId: string; name: string; method: string; url: string; iteration: number; dataIndex: number;
@@ -29,8 +30,10 @@ export interface RunReport {
   planned: number; completed: number; passed: number; failed: number; cancelled: boolean; results: RunItem[]; changes: VariableChange[];
   /** Internal token updates; omit from exported run reports. */
   authUpdates?: AuthenticationUpdate[];
+  /** Internal cookie jar; omit from exported run reports. */
+  cookies?: CookieRecord[];
 }
-export function publicRunReport(report: RunReport): Omit<RunReport, 'authUpdates'> { const { authUpdates: _private, ...output } = report; return output; }
+export function publicRunReport(report: RunReport): Omit<RunReport, 'authUpdates' | 'cookies'> { const { authUpdates: _auth, cookies: _cookies, ...output } = report; return output; }
 export const emptyAutomation = (): RequestAutomation => ({ preRequestScript: '', postResponseScript: '', assertions: [], extractions: [] });
 export const newAssertion = (): Assertion => ({ id: crypto.randomUUID(), enabled: true, name: 'Status is 200', source: 'status', path: '', operator: 'equals', expected: '200' });
 export const newExtraction = (): Extraction => ({ id: crypto.randomUUID(), enabled: true, name: 'Extract value', source: 'json', path: '$.token', variable: 'token', scope: 'collection', required: true });

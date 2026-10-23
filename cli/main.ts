@@ -22,7 +22,7 @@ Usage: reqora run WORKSPACE.json [options]
   --files DIRECTORY         Read referenced upload files from this directory only
   --report REPORT.json      Write a JSON run report
   --junit REPORT.xml        Write a JUnit report
-  --save-variables FILE.json Write updated variables and refreshed OAuth tokens
+  --save-variables FILE.json Write updated variables, cookies, and OAuth tokens
   --quiet                   Print only the final summary
 Exit codes: 0 pass, 1 failed checks/requests, 2 configuration error, 130 cancelled.
 `;
@@ -102,7 +102,7 @@ export async function main(args: string[]): Promise<number> {
     });
     if (values['--report']) await writeFile(values['--report'], JSON.stringify(publicRunReport(report), null, 2) + '\n', { mode: 0o600 });
     if (values['--junit']) await writeFile(values['--junit'], junitReport(report), { mode: 0o600 });
-    if (values['--save-variables']) await writeFile(values['--save-variables'], JSON.stringify(applyAuthenticationUpdates(applyVariableChanges(workspace, report.changes, collection.id), report.authUpdates), null, 2) + '\n', { mode: 0o600 });
+    if (values['--save-variables']) await writeFile(values['--save-variables'], JSON.stringify({ ...applyAuthenticationUpdates(applyVariableChanges(workspace, report.changes, collection.id), report.authUpdates), cookies: report.cookies ?? workspace.cookies }, null, 2) + '\n', { mode: 0o600 });
     console.log(`${report.passed} passed, ${report.failed} failed, ${report.completed}/${report.planned} completed${report.cancelled ? ', cancelled' : ''}.`);
     return report.cancelled ? 130 : report.failed ? 1 : 0;
   } catch (error) { console.error(`Reqora: ${(error as Error).message}`); return controller.signal.aborted ? 130 : 2; }

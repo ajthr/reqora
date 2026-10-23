@@ -6,20 +6,22 @@ import { validateDataRows } from '../shared/data.ts';
 import { getVariableScope, interpolate, isDraft, parseWorkspace, prepareRequest } from '../shared/workspace.ts';
 import type { Collection, Draft, Entry } from '../shared/workspace.ts';
 import { authConfigurationKey } from '../shared/auth.ts';
+import { isCookieJar, normalizedNetworkSettings } from '../shared/network.ts';
 
 export function validateExecutionInput(value: unknown): ExecutionInput {
   if (!value || typeof value !== 'object') throw new RequestError('Provide a request and its variable context.');
   const input = value as ExecutionInput;
   const collection: Collection = input.collection ?? { id: 'scratch', name: 'Scratch', description: '', variables: [] };
   try {
-    const normalized = parseWorkspace(JSON.stringify({ version: 1, collections: [collection], saved: [{ collectionId: collection.id, request: input.request }], variables: input.globals, history: [] }));
+    const normalized = parseWorkspace(JSON.stringify({ version: 1, collections: [collection], saved: [{ collectionId: collection.id, request: input.request }], variables: input.globals, history: [], cookies: input.cookies ?? [] }));
     const variables = [...normalized.variables, ...normalized.collections[0].variables];
     if (variables.length > 1000 || JSON.stringify(variables).length > 1024 * 1024) throw new Error('Variable context exceeds 1 MB or 1000 values.');
     if (input.data !== undefined) validateDataRows([input.data]);
     if (input.iteration !== undefined && (!Number.isInteger(input.iteration) || input.iteration < 0 || input.iteration > 1000)) throw new Error('Invalid iteration index.');
     if (input.files !== undefined && (!input.files || typeof input.files !== 'object' || Array.isArray(input.files) || Object.entries(input.files).some(([key, data]) => key.length > 255 || typeof data !== 'string'))) throw new Error('Invalid attached files.');
+    if (input.cookies !== undefined && !isCookieJar(input.cookies)) throw new Error('Invalid cookie jar.');
     return { request: normalized.saved[0].request, globals: normalized.variables, collection: input.collection ? normalized.collections[0] : undefined,
-      data: input.data ?? {}, files: input.files ?? {}, iteration: input.iteration ?? 0 };
+      data: input.data ?? {}, files: input.files ?? {}, iteration: input.iteration ?? 0, cookies: normalized.cookies };
   } catch (error) { throw new RequestError((error as Error).message); }
 }
 
@@ -73,8 +75,9 @@ export async function runRequest(value: unknown, signal?: AbortSignal): Promise<
     await script(input.collection?.preRequestScript, 'Collection pre-request');
     await script(input.request.preRequestScript, 'Request pre-request');
     const prepared = prepareRequest({ ...request, method: request.method.toUpperCase() }, state.variables, [...(state.collections[0]?.variables || []), ...rowEntries], new Map(Object.entries(input.files || {})), state.collections[0]?.auth);
+    if (normalizedNetworkSettings(request.network).useCookies) prepared.cookies = input.cookies;
     const inherited = request.authType === 'inherit' && !!input.collection?.auth;
-    result.response = await executeRequest(prepared, signal, { onAuthUpdate: tokens => {
+    result.response = await executeRequest(prepared, signal, { onCookieUpdate: cookies => { result.cookies = cookies; }, onAuthUpdate: tokens => {
       result.authUpdates = [{ scope: inherited ? 'collection' : 'request', id: inherited ? input.collection!.id : input.request.id,
         configurationKey: authConfigurationKey(inherited ? input.collection!.auth : input.request), oauth2: tokens }];
     } });

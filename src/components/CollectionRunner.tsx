@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { publicRunReport, applyVariableChanges } from '../../shared/automation';
 import type { AuthenticationUpdate } from '../../shared/auth';
+import type { CookieRecord } from '../../shared/network';
 import type { RunReport, RunnerOptions } from '../../shared/automation';
 import { parseRunData } from '../../shared/data';
 import { planRun, runCollection } from '../../shared/runner';
@@ -11,8 +12,8 @@ import Dialog from './Dialog';
 import AutomationResults from './AutomationResults';
 import Icon from './Icon';
 
-export default function CollectionRunner({ workspace, collectionId, onClose, onWorkspaceChange, onAuthenticationUpdate }: {
-  workspace: Workspace; collectionId: string; onClose: () => void; onWorkspaceChange: (update: (workspace: Workspace) => Workspace) => void; onAuthenticationUpdate: (updates: AuthenticationUpdate[]) => void;
+export default function CollectionRunner({ workspace, collectionId, onClose, onWorkspaceChange, onAuthenticationUpdate, onCookieUpdate }: {
+  workspace: Workspace; collectionId: string; onClose: () => void; onWorkspaceChange: (update: (workspace: Workspace) => Workspace) => void; onAuthenticationUpdate: (updates: AuthenticationUpdate[]) => void; onCookieUpdate: (cookies: CookieRecord[]) => void;
 }) {
   const collection = workspace.collections.find(item => item.id === collectionId)!;
   const requests = workspace.saved.filter(item => item.collectionId === collectionId).map(item => item.request);
@@ -45,6 +46,7 @@ export default function CollectionRunner({ workspace, collectionId, onClose, onW
         execute: executeAutomation, signal: controller.signal,
         files: async (request, signal) => Object.fromEntries(await readRequestFiles(request, signal)),
         onAuthenticationUpdate,
+        onCookieUpdate,
         onResult: (_item, progress) => { if (mounted.current) setReport({ ...progress, results: [...progress.results], changes: [...progress.changes] }); },
       });
       if (mounted.current) {

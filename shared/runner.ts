@@ -3,6 +3,7 @@ import type { ExecutionInput, ExecutionResult, RunItem, RunReport, RunnerOptions
 import { validateDataRows } from './data.ts';
 import type { Draft, Workspace } from './workspace.ts';
 import { applyAuthenticationUpdates } from './auth.ts';
+import type { CookieRecord } from './network.ts';
 
 export function planRun(workspace: Workspace, collectionId: string, options: RunnerOptions) {
   const collection = workspace.collections.find(item => item.id === collectionId);
@@ -25,6 +26,7 @@ export async function runCollection(workspace: Workspace, collectionId: string, 
   signal?: AbortSignal;
   onResult?: (item: RunItem, report: RunReport) => void;
   onAuthenticationUpdate?: (updates: NonNullable<ExecutionResult['authUpdates']>) => void;
+  onCookieUpdate?: (cookies: CookieRecord[]) => void;
 }): Promise<RunReport> {
   const plan = planRun(workspace, collectionId, options);
   let current = structuredClone(workspace);
@@ -41,7 +43,7 @@ export async function runCollection(workspace: Workspace, collectionId: string, 
     let result: ExecutionResult;
     try {
       const files = await hooks.files?.(request, hooks.signal);
-      result = await hooks.execute({ request, globals: current.variables, collection: current.collections.find(item => item.id === collectionId), data: rows[dataIndex], files, iteration: pass * rows.length + dataIndex }, hooks.signal);
+      result = await hooks.execute({ request, globals: current.variables, collection: current.collections.find(item => item.id === collectionId), data: rows[dataIndex], files, iteration: pass * rows.length + dataIndex, cookies: current.cookies }, hooks.signal);
     } catch (error) {
       if (hooks.signal?.aborted) { report.cancelled = true; break outer; }
       result = { error: (error as Error).message, passed: false, tests: [], logs: [], changes: [] };
@@ -53,6 +55,7 @@ export async function runCollection(workspace: Workspace, collectionId: string, 
       if (previous) previous.oauth2 = update.oauth2; else report.authUpdates.push({ ...update });
     }
     if (result.authUpdates?.length) hooks.onAuthenticationUpdate?.(result.authUpdates);
+    if (result.cookies) { current = { ...current, cookies: result.cookies }; report.cookies = result.cookies; hooks.onCookieUpdate?.(result.cookies); }
     if (hooks.signal?.aborted) { report.cancelled = true; break outer; }
     current = applyVariableChanges(current, result.changes, collectionId);
     report.changes = variableDelta(workspace, current, collectionId);

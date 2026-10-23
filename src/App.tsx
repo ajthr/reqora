@@ -13,6 +13,8 @@ import ChecksEditor from './components/ChecksEditor';
 import AutomationResults from './components/AutomationResults';
 import CollectionRunner from './components/CollectionRunner';
 import AuthEditor from './components/AuthEditor';
+import CookieEditor from './components/CookieEditor';
+import RequestSettings from './components/RequestSettings';
 import { applyAuthenticationUpdates, authConfigurationKey, effectiveAuth, normalizedAuth } from '../shared/auth';
 import type { AuthenticationUpdate } from '../shared/auth';
 import { authenticationCurl } from './lib/auth-client';
@@ -64,7 +66,7 @@ export default function App() {
   const [sidebarTab, setSidebarTab] = useState<'collections' | 'history'>('collections');
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState<string[]>([]);
-  const [modal, setModal] = useState<'save' | 'collection' | 'environment' | 'curl' | 'import' | 'rename' | 'move' | 'shortcuts' | 'about' | 'engine' | null>(null);
+  const [modal, setModal] = useState<'save' | 'collection' | 'environment' | 'cookies' | 'curl' | 'import' | 'rename' | 'move' | 'shortcuts' | 'about' | 'engine' | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [importText, setImportText] = useState('');
   const [runnerCollectionId, setRunnerCollectionId] = useState<string | null>(null);
@@ -220,9 +222,9 @@ export default function App() {
     const history = { id: crypto.randomUUID(), date: new Date().toISOString(), request: snapshot };
     try {
       const files = Object.fromEntries(await readRequestFiles(snapshot, abort.signal));
-      const outcome = await executeAutomation({ request: snapshot, globals: workspace.variables, collection, files }, abort.signal);
+      const outcome = await executeAutomation({ request: snapshot, globals: workspace.variables, collection, files, cookies: workspace.cookies }, abort.signal);
       setResults(current => ({ ...current, [id]: outcome }));
-      setWorkspace(current => ({ ...applyAuthenticationUpdates(applyVariableChanges(current, outcome.changes, collection?.id), outcome.authUpdates), history: [{ ...history, status: outcome.response?.status, durationMs: outcome.response?.durationMs, error: outcome.error }, ...current.history].slice(0, 100) }));
+      setWorkspace(current => ({ ...applyAuthenticationUpdates(applyVariableChanges(current, outcome.changes, collection?.id), outcome.authUpdates), ...(outcome.cookies ? { cookies: outcome.cookies } : {}), history: [{ ...history, status: outcome.response?.status, durationMs: outcome.response?.durationMs, error: outcome.error }, ...current.history].slice(0, 100) }));
       updateTabAuthentication(outcome.authUpdates || []);
       if (outcome.error || outcome.tests.some(test => !test.passed)) setResponseTab('Tests');
       setBackend('online');
@@ -284,7 +286,7 @@ export default function App() {
     const selected = workspace.saved.filter(item => item.collectionId === collection.id && (!requestId || item.request.id === requestId));
     const name = requestId ? selected[0]?.request.name || 'request' : collection.name;
     const filename = name.replace(/[^\p{L}\p{N}_-]+/gu, '-').slice(0, 80) || 'export';
-    download(`reqora-${filename}.json`, JSON.stringify({ version: 1, collections: [collection], saved: selected, history: [], variables: workspace.variables }, null, 2), 'application/json');
+    download(`reqora-${filename}.json`, JSON.stringify({ version: 1, collections: [collection], saved: selected, history: [], variables: workspace.variables, cookies: workspace.cookies }, null, 2), 'application/json');
     setToast(`${requestId ? 'Request' : 'Collection'} exported in Reqora format.`);
   }
 
@@ -376,6 +378,7 @@ export default function App() {
       { label: 'Light theme', icon: theme === 'light' ? 'check' : 'sun', onSelect: () => setTheme('light'), separator: true },
       { label: 'Dark theme', icon: theme === 'dark' ? 'check' : 'moon', onSelect: () => setTheme('dark') },
       { label: 'Global environment variables', icon: 'globe', onSelect: () => setModal('environment'), separator: true },
+      { label: 'Cookie jar', icon: 'layers', onSelect: () => setModal('cookies') },
       { label: 'Collection variables', icon: 'folder', disabled: !activeOverview && !collection, onSelect: () => openCollection((activeOverview || collection)!.id, 'variables') },
     ] },
     { label: 'Request', actions: [
@@ -413,6 +416,7 @@ export default function App() {
       <button title="Collections" aria-label="Collections" className={`rail-button ${sidebarTab === 'collections' ? 'active' : ''}`} onClick={() => { setSidebarTab('collections'); setSidebarHidden(false); setMobileSidebar(true); }}><Icon name="collection" size={21} /></button>
       <button title="History" aria-label="History" className={`rail-button ${sidebarTab === 'history' ? 'active' : ''}`} onClick={() => { setSidebarTab('history'); setSidebarHidden(false); setMobileSidebar(true); }}><Icon name="history" size={22} /></button>
       <button title="Global environment variables" aria-label="Global environment variables" className="rail-button" onClick={() => setModal('environment')}><Icon name="globe" size={21} /></button>
+      <button title="Cookie jar" aria-label="Cookie jar" className="rail-button" onClick={() => setModal('cookies')}><Icon name="layers" size={20} /></button>
       <div className="rail-spacer" />
       <button title={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`} aria-label="Toggle theme" className="rail-button" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}><Icon name={theme === 'light' ? 'moon' : 'sun'} size={20} /></button>
       <div className="avatar" title="Your local workspace">L</div>
@@ -450,7 +454,7 @@ export default function App() {
       <header className="topbar app-topbar">
         <button className="icon-button mobile-menu" aria-label="Open sidebar" onClick={() => { setSidebarHidden(false); setMobileSidebar(true); }}><Icon name="menu" /></button>
         <nav className="app-menu-bar" aria-label="Application menu" data-app-menu-bar>{applicationMenus.map(menu => <ActionMenu key={menu.label} label={`${menu.label} menu`} triggerLabel={menu.label} actions={menu.actions} />)}</nav>
-        <div className="topbar-actions"><span className="local-badge"><span className="status-dot" /> Local workspace</span><button className="environment-button" onClick={() => setModal('environment')} title="Edit global environment variables"><Icon name="globe" size={17} /><span>Global variables</span><span className="environment-count">{getVariableScope(workspace.variables).length}</span></button></div>
+        <div className="topbar-actions"><span className="local-badge"><span className="status-dot" /> Local workspace</span><button className="environment-button" onClick={() => setModal('cookies')} title="Edit cookie jar"><Icon name="layers" size={16} /><span>Cookies</span><span className="environment-count">{workspace.cookies.length}</span></button><button className="environment-button" onClick={() => setModal('environment')} title="Edit global environment variables"><Icon name="globe" size={17} /><span>Global variables</span><span className="environment-count">{getVariableScope(workspace.variables).length}</span></button></div>
       </header>
       {hasOpenTabs && <div className="request-tabs" role="tablist" aria-label="Open workspace tabs">
         {openCollections.map(item => <div className={`request-tab collection-workspace-tab ${activeOverview?.id === item.id ? 'active' : ''}`} key={`collection:${item.id}`}><button role="tab" aria-selected={activeOverview?.id === item.id} onClick={() => openCollection(item.id)}><Icon name="folder" size={14} /><span>{item.name}</span></button><button className="tab-close" aria-label={`Close collection ${item.name}`} onClick={() => closeCollectionTab(item.id)}><Icon name="close" size={12} /></button></div>)}
@@ -477,7 +481,7 @@ export default function App() {
             {editorTab === 'Scripts' && <ScriptEditor value={draft} onChange={updateDraft} />}
             {editorTab === 'Tests' && <ChecksEditor value={draft} onChange={updateDraft} />}
             {editorTab === 'Auth' && <AuthEditor key={draft.id} value={draft} collectionAuth={collection?.auth} collectionName={collection?.name} variables={effectiveVariables} onChange={updateDraft} />}
-            {editorTab === 'Settings' && <div className="settings-panel"><div><label className="field-label" htmlFor="timeout">Request timeout</label><p>Time to wait before cancelling the request.</p></div><label className="timeout-input"><input id="timeout" type="number" min="0.1" max="60" step="0.1" value={draft.timeoutMs / 1000} onChange={event => updateDraft({ timeoutMs: Number(event.target.value) * 1000 })} /><span>seconds</span></label><div><strong>Follow redirects</strong><p>Automatically follow HTTP redirect responses.</p></div><input className="toggle-check" aria-label="Follow redirects" type="checkbox" checked={draft.followRedirects} onChange={event => updateDraft({ followRedirects: event.target.checked })} /></div>}
+            {editorTab === 'Settings' && <RequestSettings draft={draft} onChange={updateDraft} cookieCount={workspace.cookies.length} onOpenCookies={() => setModal('cookies')} />}
           </div>
         </div>
 
@@ -495,7 +499,7 @@ export default function App() {
       </footer>
     </main>
 
-    {runnerCollectionId && <CollectionRunner workspace={workspace} collectionId={runnerCollectionId} onClose={() => setRunnerCollectionId(null)} onWorkspaceChange={setWorkspace} onAuthenticationUpdate={updates => { setWorkspace(current => applyAuthenticationUpdates(current, updates)); updateTabAuthentication(updates); }} />}
+    {runnerCollectionId && <CollectionRunner workspace={workspace} collectionId={runnerCollectionId} onClose={() => setRunnerCollectionId(null)} onWorkspaceChange={setWorkspace} onAuthenticationUpdate={updates => { setWorkspace(current => applyAuthenticationUpdates(current, updates)); updateTabAuthentication(updates); }} onCookieUpdate={cookies => setWorkspace(current => ({ ...current, cookies }))} />}
     {toast && <div className="toast" role="status"><Icon name="check" size={17} /><span>{toast}</span><button className="icon-button" aria-label="Dismiss notification" onClick={() => setToast('')}><Icon name="close" size={14} /></button></div>}
     {modal === 'save' && <Modal title="Save request" onClose={() => setModal(null)}>
       <form noValidate onSubmit={event => { event.preventDefault(); if (!saveName.trim()) { setDialogError('Enter a request name.'); return; } if (collectionId) persistRequest(saveName, collectionId); }}>
@@ -520,6 +524,7 @@ export default function App() {
       <div className="environment-note"><Icon name="lock" size={14} />Values are stored in this browser and included in workspace exports.</div>
       <div className="modal-footer"><button className="button button-primary" onClick={() => setModal(null)}>Done</button></div>
     </Modal>}
+    {modal === 'cookies' && <Modal title="Cookie jar" wide onClose={() => setModal(null)}><CookieEditor cookies={workspace.cookies} defaultDomain={(() => { try { return new URL(draft.url).hostname; } catch { return ''; } })()} onChange={cookies => setWorkspace(current => ({ ...current, cookies }))} onClear={() => setConfirmation({ title: 'Clear cookie jar?', description: `Delete all ${workspace.cookies.length} stored cookies from this workspace?`, confirmLabel: 'Clear cookies', onConfirm: () => setWorkspace(current => ({ ...current, cookies: [] })) })} /></Modal>}
     {modal === 'curl' && <Modal title="Generate code" wide onClose={() => setModal(null)}>
       <p className="modal-description">Run this cURL command in a POSIX shell. Environment variables are resolved. For file bodies, place the named files in your current directory; file bytes are not embedded.</p>
       <div className="code-language"><Icon name="terminal" size={15} /> cURL · Shell</div><pre className="curl-preview">{curl}</pre>
@@ -544,7 +549,7 @@ export default function App() {
     </Modal>}
     {modal === 'import' && <Modal title={pendingImport ? 'Replace your workspace?' : 'Import workspace'} wide onClose={() => setModal(null)}>
       {pendingImport ? <>
-        <p className="modal-description">This import will replace your saved collections, request history, and environment variables. Open request tabs will stay available. Export your current workspace first if you want to keep a backup.</p>
+        <p className="modal-description">This import will replace your saved collections, request history, environment variables, and cookie jar. Open request tabs will stay available. Export your current workspace first if you want to keep a backup.</p>
         <div className="import-summary"><div><strong>{pendingImport.collections.length}</strong><span>Collections</span></div><div><strong>{pendingImport.saved.length}</strong><span>Requests</span></div><div><strong>{pendingImport.variables.length}</strong><span>Variables</span></div></div>
         <div className="modal-footer"><button className="button button-secondary" onClick={() => setPendingImport(null)} data-dialog-initial-focus>Back</button><button className="button button-danger" onClick={() => { setWorkspace(pendingImport); setModal(null); setToast('Workspace imported.'); }}>Replace workspace</button></div>
       </> : <>

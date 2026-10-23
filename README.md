@@ -21,6 +21,7 @@ Reqora now has its first working REST workflow: a shared React and TypeScript wo
 - Global environment and per-collection variables with `{{variable}}` substitution in URLs, parameters, headers, authentication, and bodies. Collection values take priority over globals, including in generated cURL.
 - Collection overview pages with descriptions, request lists, variable editors, and a resolved-value table showing the source of each effective variable.
 - A server-side request engine with cancellation, configurable timeouts, and optional redirect following.
+- A persistent workspace cookie jar with an editor, per-request cookie control, HTTP(S) proxy settings, custom CA certificates, and client certificates for mTLS.
 - Response status, elapsed time, decoded body size, headers, formatted JSON, raw text, copying, and downloads. Binary responses can be downloaded.
 - Named collections, saved requests, search, and the last 100 request attempts in local history.
 - Three-dot menus on requests and collections for renaming, duplication, export, and deletion; request menus also support moving between collections and copying cURL.
@@ -49,7 +50,7 @@ Variable priority, from highest to lowest, is **collection → global environmen
 
 Close collection and request tabs to return to the startup page. Closing an overview preserves its automatically saved settings.
 
-Collections, saved request credentials, history, and environment values are stored in local browser storage without encryption. Workspace exports include those values. Web and desktop maintain separate local workspaces; use export/import to move between them. Save requests you want to keep before closing their tabs.
+Collections, saved request credentials, cookies, history, and environment values are stored in local browser storage without encryption. Workspace exports include those values. Web and desktop maintain separate local workspaces; use export/import to move between them. Save requests you want to keep before closing their tabs.
 
 To import a workspace, open **Import**, drag a Reqora JSON export into the custom dialog or paste its contents, then review and confirm replacement. Request and collection exports use the same workspace format and include environment values so variable references remain usable. Imports replace the saved workspace after confirmation; they do not merge into it.
 
@@ -78,6 +79,10 @@ Use a request's **Auth** tab, or a collection's **Auth** section to share creden
 
 OAuth helpers can obtain tokens through a browser authorization page or client credentials, and refresh them automatically. Collection runs and the CLI use the same signing/token engine. See [authentication setup and supported flows](docs/authentication.md), including redirect URI registration and CLI token persistence.
 
+## Cookies, proxies, and TLS
+
+Open **Cookie jar** from the toolbar or sidebar to add, edit, filter, delete, or clear cookies. Each request's **Settings** tab controls use of the jar, proxy mode, custom CA, and client certificate. See [network configuration](docs/network.md) for cookie matching, persistence, proxy environment variables, certificate setup, and CLI behavior.
+
 ## Platforms and technology
 
 - **Web:** A browser-based REST client.
@@ -88,7 +93,7 @@ The initial scope is REST over HTTP and HTTPS. GraphQL, WebSocket, gRPC, and oth
 
 ## Planned REST capabilities
 
-The goal is comprehensive coverage of the REST workflows available in established clients. This outline includes both the initial features above and work still to come, such as cookie management and OpenAPI/third-party collection imports.
+The goal is comprehensive coverage of the REST workflows available in established clients. This outline includes both the initial features above and work still to come, such as OpenAPI/third-party collection imports.
 
 ### Compose and send requests
 
@@ -205,7 +210,7 @@ Web output is written to `dist/`; compiled Electron code and its shared backend 
 - `POST /api/execute` accepts JSON containing `url`, `method`, `headers` (an array of `{ name, value }`), optional `body` (text or a typed binary/multipart body), `timeoutMs`, and `followRedirects`.
 - Responses contain the upstream status, status text, final URL, headers, body, encoding (`utf8` or `base64`), duration, and byte size. Upstream 4xx/5xx responses remain inspectable; transport and validation errors use a JSON `error` field.
 
-The initial engine verifies TLS certificates, supports timeouts from 100 ms to 60 seconds, limits outbound request bodies to 10 MB and JSON execution payloads to 16 MB (to accommodate base64 file transport), and limits decoded response bodies to 5 MB. Response previews show up to 100 KB / 2,000 lines; downloads include the full response within the engine limit. Request framing headers such as `Host` and `Content-Length` are managed by the engine. Cookie headers can be set manually, but a persistent cookie jar has not been implemented.
+The engine verifies TLS certificates, supports timeouts from 100 ms to 60 seconds, limits outbound request bodies to 10 MB and JSON execution payloads to 16 MB (to accommodate base64 file transport), and limits decoded response bodies to 5 MB. Response previews show up to 100 KB / 2,000 lines; downloads include the full response within the engine limit. Request framing headers such as `Host` and `Content-Length` are managed by the engine. See [network configuration](docs/network.md) for cookies, proxies, and certificates.
 
 This is currently a local, single-user application. Accounts, cloud synchronization, encrypted credential storage, and multi-user hosting are outside this increment.
 

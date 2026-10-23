@@ -210,6 +210,28 @@ code, kbd, pre { font-family: var(--mono); }
 .oauth-session .oauth-callback { height: 75px; padding: 10px; font-family: var(--mono); resize: vertical; }
 .oauth-token-settings { font-size: 14px; line-height: 1.7; padding-bottom: 12px; }
 .oauth-token-settings summary { color: var(--accent); cursor: pointer; margin-bottom: 12px; }
+.request-settings { display: grid; gap: 26px; padding-bottom: 18px; }
+.request-settings section { border-bottom: 1px solid var(--border); padding-bottom: 16px; }
+.request-settings section:last-child { border-bottom: 0; }
+.request-settings h3, .cookie-form h3 { margin: 0 0 13px; font-size: 16px; color: var(--text); }
+.request-settings .settings-panel { padding: 0; }
+.network-inline { display: flex; align-items: center; flex-wrap: wrap; gap: 15px; margin-bottom: 12px; }
+.network-inline label, .cookie-flags label, .cookie-show { display: inline-flex; align-items: center; gap: 7px; font-size: 14px; color: var(--secondary); }
+.network-pem-field { grid-column: 1 / -1; }
+.network-pem { height: 110px; min-height: 85px; font-size: 12px; }
+.network-pem-field small { font-size: 12px; color: var(--muted); }
+.cookie-toolbar { display: flex; gap: 12px; align-items: center; margin: 12px 0 17px; }
+.cookie-toolbar > input { flex: 1; }
+.cookie-list { border: 1px solid var(--border); border-radius: 6px; max-height: 320px; overflow-y: auto; margin-bottom: 18px; }
+.cookie-row { display: flex; align-items: center; gap: 12px; padding: 11px 13px; border-bottom: 1px solid var(--border); }
+.cookie-row:last-child { border-bottom: 0; }
+.cookie-row > div { display: grid; gap: 4px; flex: 1; min-width: 0; }
+.cookie-row strong { overflow-wrap: anywhere; font-size: 14px; }
+.cookie-row span { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.cookie-form { border-top: 1px solid var(--border); padding-top: 16px; }
+.cookie-show { font-size: 12px; }
+.cookie-flags { display: flex; flex-wrap: wrap; gap: 14px; margin: 4px 0 15px; }
+@media (max-width: 600px) { .cookie-toolbar { flex-wrap: wrap; } .cookie-toolbar > input { flex-basis: 100%; } }
 @media (max-width: 700px) { .auth-selection, .auth-field-grid { grid-template-columns: 1fr; } }
 .script-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .script-code { display: block; width: 100%; min-height: 180px; resize: vertical; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 12px; font: 14px/1.7 var(--mono); tab-size: 2; }

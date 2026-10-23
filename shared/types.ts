@@ -1,4 +1,5 @@
 import type { AuthConfig } from './auth.ts';
+import type { CookieRecord, NetworkSettings } from './network.ts';
 
 export interface Header {
   name: string;
@@ -22,6 +23,8 @@ export interface HttpRequest {
   timeoutMs: number;
   followRedirects: boolean;
   auth?: AuthConfig;
+  network?: NetworkSettings;
+  cookies?: CookieRecord[];
 }
 
 export interface HttpResponse {
@@ -33,4 +36,5 @@ export interface HttpResponse {
   encoding: 'utf8' | 'base64';
   durationMs: number;
   size: number;
+  cookies?: CookieRecord[];
 }

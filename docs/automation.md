@@ -130,13 +130,13 @@ npm run cli -- run workspace.json --var base_url=http://localhost:3000 --var use
 # Attach files referenced by exported metadata, within an explicitly allowed directory:
 npm run cli -- run workspace.json --files ./fixtures
 
-# Persist variable changes and acquired/refreshed OAuth tokens to a separate workspace file:
+# Persist variable, cookie, and acquired/refreshed OAuth token changes to a separate workspace file:
 npm run cli -- run workspace.json --save-variables workspace-after-run.json
 ```
 
 `--files` resolves only validated basenames within the directory and rejects symlinks resolving outside it. File bytes are limited by the same 10 MB request-body limit. The CLI does not change the input workspace unless you explicitly choose it as an output path. Reports use restrictive file permissions where supported. `--quiet` suppresses per-request progress. Ctrl+C cancels the run; configured report files still record completed results and cancellation.
 
-All request/collection [authentication helpers](authentication.md) work in the runner and CLI. Interactive OAuth authorization is completed in the UI before exporting; client credentials and refresh execute automatically. JSON reports omit internal OAuth token-update records. Use the workspace written by `--save-variables` for later runs when your provider rotates refresh tokens.
+All request/collection [authentication helpers](authentication.md) and [network settings](network.md) work in the runner and CLI. Interactive OAuth authorization is completed in the UI before exporting; client credentials and refresh execute automatically. JSON reports omit internal OAuth token-update records and the cookie jar. Use the workspace written by `--save-variables` for later runs when your provider rotates refresh tokens or you need cookies from a previous run.
 
 Exit codes: **0** all executed requests/checks passed; **1** a request, script, assertion, or required extraction failed; **2** invalid configuration/input/report output; **130** cancelled.
 
@@ -144,4 +144,4 @@ Installed Linux/macOS bundles provide `~/.local/bin/reqora-run`. Windows provide
 
 ## API
 
-`POST /api/run-request` uses the same origin/content-type protections and 16 MB JSON payload limit as `/api/execute`. Send `{ request, globals, collection?, data?, files?, iteration? }`: `request` is a Reqora draft; variables use the workspace entry format; `files` maps attachment IDs to base64 data. The response includes `{ response?, error?, passed, tests, logs, changes, authUpdates? }`; internal `authUpdates` contain refreshed tokens and configuration guards for the owning request/collection and must not be included in exported run reports. HTTP status reflects transport/input validity; a valid execution with failed checks returns HTTP 200 with `passed: false`. The legacy `/api/execute` endpoint still accepts already-prepared HTTP requests, including active `auth`, and does not run scripts or persist refreshed tokens. OAuth UI actions use `POST /api/auth`; `GET /api/auth/callback` accepts state-validated provider callbacks, and `POST /api/auth/preview` generates an OAuth 1 header without sending the resource request.
+`POST /api/run-request` uses the same origin/content-type protections and 16 MB JSON payload limit as `/api/execute`. Send `{ request, globals, collection?, data?, files?, iteration?, cookies? }`: `request` is a Reqora draft; variables use the workspace entry format; `files` maps attachment IDs to base64 data; `cookies` is the current workspace jar. The response includes `{ response?, error?, passed, tests, logs, changes, authUpdates?, cookies? }`; internal `authUpdates` contain refreshed tokens and configuration guards for the owning request/collection and must not be included in exported run reports. Updated `cookies` must be persisted by the caller. HTTP status reflects transport/input validity; a valid execution with failed checks returns HTTP 200 with `passed: false`. The lower-level `/api/execute` endpoint accepts already-prepared HTTP requests, including active `auth`, `network`, and `cookies`, and does not run scripts or persist state. OAuth UI actions use `POST /api/auth`; `GET /api/auth/callback` accepts state-validated provider callbacks, and `POST /api/auth/preview` generates an OAuth 1 header without sending the resource request.

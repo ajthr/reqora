@@ -37,6 +37,11 @@ for (const mode of modes) {
       const cli = join(prefix, 'web/cli.mjs');
       fixture = createServer((request, response) => {
         response.setHeader('Content-Type', 'application/json');
+        if (request.url === '/cookie') {
+          if (request.headers.cookie === 'packaged=ok') response.end('{"cookieReceived":true}');
+          else { response.setHeader('Set-Cookie', 'packaged=ok; Path=/; HttpOnly'); response.end('{"cookieReceived":false}'); }
+          return;
+        }
         response.statusCode = request.headers.authorization?.startsWith('AWS4-HMAC-SHA256 ') && request.headers['x-amz-content-sha256'] ? 200 : 401;
         response.end('{"packagedRequest":true}');
       });
@@ -58,6 +63,20 @@ for (const mode of modes) {
         });
         assert.equal(result.status, 200);
         const signed = await result.json(); assert.equal(signed.status, 200); assert.match(signed.body, /packagedRequest/);
+        const cookieTarget = `http://127.0.0.1:${fixture.address().port}/cookie`;
+        const sendCookie = async cookies => {
+          const sent = await fetch(`${base}/api/execute`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base },
+            body: JSON.stringify({ method: 'GET', url: cookieTarget, headers: [], timeoutMs: 5000, followRedirects: true, cookies }),
+          });
+          assert.equal(sent.status, 200);
+          return sent.json();
+        };
+        const firstCookie = await sendCookie([]);
+        assert.equal(JSON.parse(firstCookie.body).cookieReceived, false);
+        assert.equal(firstCookie.cookies?.[0]?.name, 'packaged');
+        const secondCookie = await sendCookie(firstCookie.cookies);
+        assert.equal(JSON.parse(secondCookie.body).cookieReceived, true);
         const request = { ...newDraft(), name: 'Packaged automation', url: `http://127.0.0.1:${fixture.address().port}/`, postResponseScript: 'rq.test("Packaged QuickJS", () => rq.expect(rq.response.json().packagedRequest).toBe(true));' };
         const collection = { id: 'packaged', name: 'Packaged', description: '', variables: [], auth: { authType: 'aws', aws: { accessKeyId: 'test-key', secretAccessKey: 'test-secret', region: 'us-east-1', service: 'execute-api', sessionToken: '' } } };
         request.postResponseScript += ' rq.test("Inherited AWS", () => rq.expect(rq.response.status).toBe(200));';

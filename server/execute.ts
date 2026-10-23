@@ -7,6 +7,11 @@ import { AuthenticationError } from './auth-error.ts';
 import { authenticate } from './request-auth.ts';
 import { digestChallenge } from './auth-signing.ts';
 import { usableOAuth2 } from './oauth.ts';
+import { isCookieJar } from '../shared/network.ts';
+import type { CookieRecord } from '../shared/network.ts';
+import { createTransport, TransportError, validateNetwork } from './transport.ts';
+import { CookieJarError, RequestCookieJar } from './cookies.ts';
+import type { Dispatcher } from 'undici';
 
 export const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 
@@ -86,18 +91,24 @@ export function validateRequest(input: unknown): HttpRequest {
   }
   if (typeof value.followRedirects !== 'boolean') throw new RequestError('Redirect handling must be true or false.');
   if (value.auth !== undefined && !isAuthConfig(value.auth, false)) throw new RequestError('Invalid authentication configuration.');
+  if (value.cookies !== undefined && !isCookieJar(value.cookies)) throw new RequestError('Invalid cookie jar.');
+  let network;
+  try { network = validateNetwork(value.network); } catch (error) { throw new RequestError((error as Error).message); }
   return { url: url.href, method, headers, body, timeoutMs: value.timeoutMs, followRedirects: value.followRedirects,
-    ...(value.auth !== undefined ? { auth: effectiveAuth(value.auth as HttpRequest['auth'] & {}, undefined) } : {}) };
+    ...(value.auth !== undefined ? { auth: effectiveAuth(value.auth as HttpRequest['auth'] & {}, undefined) } : {}), network,
+    ...(value.cookies !== undefined ? { cookies: value.cookies as CookieRecord[] } : {}) };
 }
 
-export async function executeRequest(input: unknown, signal?: AbortSignal, options: { onAuthUpdate?: (tokens: OAuth2Tokens) => void } = {}): Promise<HttpResponse> {
+export async function executeRequest(input: unknown, signal?: AbortSignal, options: { onAuthUpdate?: (tokens: OAuth2Tokens) => void; onCookieUpdate?: (cookies: CookieRecord[]) => void } = {}): Promise<HttpResponse> {
   const request = validateRequest(input);
   const started = performance.now();
   const timeout = AbortSignal.timeout(request.timeoutMs);
   const headers = new Headers();
   for (const header of request.headers) headers.append(header.name, header.value);
+  let dispatcher: Dispatcher | undefined;
 
   try {
+    const jar = request.network!.useCookies && request.cookies ? new RequestCookieJar(request.cookies) : undefined;
     let body: string | Buffer | undefined;
     if (typeof request.body === 'string') body = ['GET', 'HEAD'].includes(request.method) ? undefined : request.body;
     else if (request.body?.kind === 'binary') {
@@ -117,26 +128,34 @@ export async function executeRequest(input: unknown, signal?: AbortSignal, optio
     }
     const activeSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
     let url = new URL(request.url), method = request.method, auth = request.auth;
+    dispatcher = createTransport(request.network!);
+    let cookieUpdates: CookieRecord[] | undefined;
     let response: Response;
     let redirects = 0;
+    const addCookies = (outgoing: Headers) => { if (jar && !outgoing.has('cookie')) { const cookie = jar.header(url); if (cookie) outgoing.set('Cookie', cookie); } };
     while (true) {
       let outgoing = new Headers(headers);
+      addCookies(outgoing);
       await authenticate(method, url, outgoing, body, auth, activeSignal, options.onAuthUpdate);
-      const send = () => fetch(url, { method, headers: outgoing, body, redirect: 'manual', signal: activeSignal });
+      const send = () => fetch(url, { method, headers: outgoing, body, redirect: 'manual', signal: activeSignal, ...(dispatcher ? { dispatcher } : {}) } as RequestInit & { dispatcher?: Dispatcher });
       response = await send();
+      const collect = () => { const updates = jar?.receive(url, response.headers); if (updates) { cookieUpdates = updates; options.onCookieUpdate?.(updates); } };
+      collect();
       if (auth?.authType === 'digest') for (let attempt = 0; response.status === 401 && attempt < 2; attempt++) {
         const challenge = digestChallenge(response.headers.get('www-authenticate') || '');
         if (!challenge || attempt > 0 && challenge.stale?.toLowerCase() !== 'true') break;
-        await response.body?.cancel(); outgoing = new Headers(headers);
+        await response.body?.cancel(); outgoing = new Headers(headers); addCookies(outgoing);
         await authenticate(method, url, outgoing, body, auth, activeSignal, undefined, challenge);
         response = await send();
+        collect();
       }
       if (auth?.authType === 'oauth2' && response.status === 401 && auth.oauth2!.autoRefresh && (auth.oauth2!.refreshToken || auth.oauth2!.grantType === 'client_credentials')) {
         await response.body?.cancel();
         const refreshed = await usableOAuth2(auth.oauth2!, activeSignal, true);
         Object.assign(auth.oauth2!, refreshed.tokens); options.onAuthUpdate?.(refreshed.tokens);
-        outgoing = new Headers(headers); await authenticate(method, url, outgoing, body, auth, activeSignal, options.onAuthUpdate);
+        outgoing = new Headers(headers); addCookies(outgoing); await authenticate(method, url, outgoing, body, auth, activeSignal, options.onAuthUpdate);
         response = await send();
+        collect();
       }
       const location = response.headers.get('location');
       if (!request.followRedirects || ![301, 302, 303, 307, 308].includes(response.status) || !location) break;
@@ -151,6 +170,8 @@ export async function executeRequest(input: unknown, signal?: AbortSignal, optio
           else next.searchParams.delete(auth.apiKey!.name);
         }
         auth = undefined;
+        await dispatcher?.destroy();
+        dispatcher = createTransport(request.network!, false);
       }
       if (response.status === 303 && method !== 'HEAD' || [301, 302].includes(response.status) && method === 'POST') {
         method = 'GET'; body = undefined;
@@ -191,12 +212,14 @@ export async function executeRequest(input: unknown, signal?: AbortSignal, optio
       encoding: isText ? 'utf8' : 'base64',
       durationMs: Math.round(performance.now() - started),
       size,
+      ...(cookieUpdates ? { cookies: cookieUpdates } : {}),
     };
   } catch (error) {
     if (error instanceof RequestError) throw error;
     if (timeout.aborted) throw new RequestError(`Request timed out after ${request.timeoutMs / 1000} seconds.`, 504);
     if (signal?.aborted) throw new RequestError('Request cancelled.', 499);
     if (error instanceof AuthenticationError) throw new RequestError(error.message, 400);
+    if (error instanceof TransportError || error instanceof CookieJarError) throw new RequestError(error.message, 400);
     throw new RequestError('Unable to connect to the server. Check the URL, network connection, and TLS certificate.', 502);
-  }
+  } finally { await dispatcher?.destroy(); }
 }
