@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, relative, sep } from 'node:path';
 
 const exec = promisify(execFile);
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -35,12 +35,20 @@ const run = async (program, params, options = {}) => {
 // Avoid a shell, including on Windows: execute the active npm CLI through Node.
 if (!process.env.npm_execpath) throw new Error('Run this script with npm run package.');
 await run(process.execPath, [process.env.npm_execpath, 'run', 'build']);
-const notices = `Reqora ${pkg.version}\nCopyright (c) Ajith. Reqora is distributed under the MIT license (LICENSE).\n\nDesktop payloads include Electron's LICENSE and LICENSES.chromium.html.\nWeb payloads include the Node.js license in web/runtime/LICENSE.\nReact and React DOM licenses are in each app's licenses directory.\nNo signing certificates are included. See docs/installation.md in the source repository.\n`;
+const notices = `Reqora ${pkg.version}\nCopyright (c) Ajith. Reqora is distributed under the MIT license (LICENSE).\n\nDesktop payloads include Electron's LICENSE and LICENSES.chromium.html.\nWeb payloads include the Node.js license in web/runtime/LICENSE.\nReact and React DOM licenses are in each app's licenses directory; QuickJS runtime licenses are in its node_modules packages.\nNo signing certificates are included. See docs/installation.md in the source repository.\n`;
+const dependencyList = await exec(process.execPath, [process.env.npm_execpath, 'ls', '--omit=dev', '--all', '--parseable'], { cwd: root });
+const runtimeDependencies = [...new Set(dependencyList.stdout.trim().split(/\r?\n/))].filter(path => path.startsWith(join(root, 'node_modules') + sep));
 async function copyApp(destination) {
   await mkdir(destination, { recursive: true });
   await cp('dist', join(destination, 'dist'), { recursive: true });
   await cp('dist-electron/server', join(destination, 'server'), { recursive: true });
   await cp('dist-electron/shared', join(destination, 'shared'), { recursive: true });
+  await cp('dist-electron/cli', join(destination, 'cli'), { recursive: true });
+  for (const dependency of runtimeDependencies) {
+    const target = join(destination, relative(root, dependency));
+    await mkdir(dirname(target), { recursive: true });
+    await cp(dependency, target, { recursive: true, verbatimSymlinks: true });
+  }
   await writeFile(join(destination, 'package.json'), '{"type":"module"}\n');
   await mkdir(join(destination, 'licenses'), { recursive: true });
   for (const dependency of ['react', 'react-dom', 'scheduler']) {
@@ -123,6 +131,7 @@ for (const selected of modes) {
   if (selected !== 'web') await cp(desktop, join(bundle, 'desktop', ...(platform === 'darwin' ? ['Reqora.app'] : [])), { recursive: true, dereference: false, verbatimSymlinks: true });
   if (selected !== 'desktop') await cp(web, join(bundle, 'web'), { recursive: true });
   if (platform === 'win32') {
+    await cp('packaging/windows/reqora-run.cmd', join(bundle, 'reqora-run.cmd'));
     const executable = join(release, `${name}-setup.exe`);
     const defaultCompiler = join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'NSIS', 'makensis.exe');
     let compiler = process.env.MAKENSIS;

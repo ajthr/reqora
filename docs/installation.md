@@ -68,6 +68,7 @@ A single-component archive can install only its component; the `both` archive su
 ~/.local/bin/reqora-web stop
 ~/.local/bin/reqora-web run          # Foreground, suitable for a terminal or user service
 ~/.local/bin/reqora-uninstall
+~/.local/bin/reqora-run --help       # Collection CLI runner
 ```
 
 If a server is already running, `run` reports its URL and exits. Stop it first to run in the foreground. An already-running server retains its port; stop it before changing ports:
@@ -127,3 +128,5 @@ For a Developer ID build, supply `REQORA_MAC_SIGN_IDENTITY` with a certificate i
 The **Build installers** GitHub Actions workflow builds on native Linux, Windows, and macOS runners for x64 and arm64. Run it manually and choose a mode, or push a `vVERSION` tag matching `package.json` to build all modes. Download its artifacts from the workflow run. Each job silently/terminal-installs the packages, exercises the bundled web UI and engine, and uninstalls them. It uploads build artifacts only; it does not create or publish a GitHub Release. No repository URL or hosted download endpoint is assumed.
 
 Native CI jobs and real-machine installation checks are required before declaring Windows/macOS installers verified. Local Linux builds do not validate Windows wizard interactions, macOS Gatekeeper, or every desktop distribution.
+
+The installed collection CLI is `~/.local/bin/reqora-run` on Linux/macOS or `%LOCALAPPDATA%\Programs\Reqora\reqora-run.cmd` on Windows. See [automation](automation.md) for data-driven runs and CI reports.

@@ -25,6 +25,9 @@ Reqora now has its first working REST workflow: a shared React and TypeScript wo
 - Three-dot menus on requests and collections for renaming, duplication, export, and deletion; request menus also support moving between collections and copying cURL.
 - Shared in-app dialogs for editing and destructive actions, with keyboard focus containment, Escape dismissal, and focus restoration.
 - Reqora workspace JSON import/export and POSIX-shell cURL command generation.
+- Pre-request/post-response scripts at request and collection scope, response assertions, and response-to-variable extraction.
+- A sequential collection runner with JSON/CSV datasets, iterations, delay, cancellation, and optional variable persistence.
+- A CLI runner with JSON/JUnit reports and CI exit codes, using the same pipeline as the UI.
 - `Ctrl/Cmd + Enter` to send and `Ctrl/Cmd + S` to save.
 
 Use the sidebar rail to switch between collections and history. Those views are not duplicated as workspace tabs. Text and editor sizes have been increased throughout the interface for readability.
@@ -64,6 +67,10 @@ Attachments are stored separately in IndexedDB on the current device, outside lo
 
 Global/collection variables apply to raw content and form field names/text values. File bytes and filenames remain literal. GET and HEAD ignore configured bodies and attachments while retaining them for later method changes. The combined outbound body limit is **10 MB**, including multipart boundaries; the JSON transport limit is **16 MB**. cURL exports use local filenames (`--form` / `--data-binary`), so place the named files in the directory where you run the command.
 
+## Automation
+
+See [scripts, assertions, extraction, collection runs, and CLI usage](docs/automation.md) for setup and examples. Run `npm run cli -- --help` for CLI options.
+
 ## Platforms and technology
 
 - **Web:** A browser-based REST client.
@@ -74,7 +81,7 @@ The initial scope is REST over HTTP and HTTPS. GraphQL, WebSocket, gRPC, and oth
 
 ## Planned REST capabilities
 
-The goal is comprehensive coverage of the REST workflows available in established clients. This outline includes both the initial features above and work still to come, such as OAuth, cookie management, scripting, collection runners, and OpenAPI/third-party collection imports.
+The goal is comprehensive coverage of the REST workflows available in established clients. This outline includes both the initial features above and work still to come, such as OAuth, cookie management, and OpenAPI/third-party collection imports.
 
 ### Compose and send requests
 
@@ -187,6 +194,7 @@ Web output is written to `dist/`; compiled Electron code and its shared backend 
 ### Backend API
 
 - `GET /api/health` returns the request engine's health.
+- `POST /api/run-request` runs the shared automation pipeline, returning response/checks/logs/variable changes; see [automation API](docs/automation.md#api).
 - `POST /api/execute` accepts JSON containing `url`, `method`, `headers` (an array of `{ name, value }`), optional `body` (text or a typed binary/multipart body), `timeoutMs`, and `followRedirects`.
 - Responses contain the upstream status, status text, final URL, headers, body, encoding (`utf8` or `base64`), duration, and byte size. Upstream 4xx/5xx responses remain inspectable; transport and validation errors use a JSON `error` field.
 
@@ -204,6 +212,9 @@ server/                  Node.js server and shared HTTP request engine
 shared/                  Shared request/response types and body limits
 scripts/dev.mjs          Web/backend development process launcher
 scripts/package.mjs      Native installation package builder
+cli/                     Collection CLI runner
+server/pipeline.ts       Shared request automation execution
+shared/runner.ts         Ordered collection and data-driven run orchestration
 packaging/               Windows wizard, Unix installers, web launcher, icons
 docs/installation.md     Installation, upgrades, and release build guide
 .github/workflows/       Native installer build automation

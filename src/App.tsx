@@ -1,12 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import logo from '../assets/logo-full.png';
-import type { HttpResponse } from '../shared/types';
 import Icon from './components/Icon';
 import KeyValueEditor from './components/KeyValueEditor';
 import CodeView from './components/CodeView';
 import BodyEditor from './components/BodyEditor';
 import { readRequestFiles } from './lib/attachments';
-import { MAX_API_BYTES } from '../shared/body';
+import { applyVariableChanges } from '../shared/automation';
+import type { ExecutionResult } from '../shared/automation';
+import { executeAutomation } from './lib/execution';
+import ScriptEditor from './components/ScriptEditor';
+import ChecksEditor from './components/ChecksEditor';
+import AutomationResults from './components/AutomationResults';
+import CollectionRunner from './components/CollectionRunner';
 import Modal, { ConfirmDialog } from './components/Dialog';
 import type { Confirmation } from './components/Dialog';
 import ActionMenu from './components/ActionMenu';
@@ -14,14 +19,14 @@ import type { MenuAction } from './components/ActionMenu';
 import Startup from './components/Startup';
 import CollectionOverview from './components/CollectionOverview';
 import type { CollectionSection } from './components/CollectionOverview';
-import { closeRequestTab, formatBody, formatSize, getRequestCollection, getVariableScope, initialWorkspace, newDraft, parseWorkspace, prepareWorkspaceRequest, workspaceToCurl } from './lib/workspace';
+import { closeRequestTab, formatBody, formatSize, getRequestCollection, getVariableScope, initialWorkspace, newDraft, parseWorkspace, workspaceToCurl } from './lib/workspace';
 import type { Collection, Draft, Workspace } from './lib/workspace';
 import { brandingInteractionProps } from './lib/branding';
 
 const STORAGE_KEY = 'reqora.workspace.v1';
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
-type Result = { response?: HttpResponse; error?: string };
-type EditorTab = 'Params' | 'Headers' | 'Body' | 'Auth' | 'Settings';
+type Result = Partial<ExecutionResult>;
+type EditorTab = 'Params' | 'Headers' | 'Body' | 'Auth' | 'Scripts' | 'Tests' | 'Settings';
 
 function loadWorkspace(): Workspace {
   try { const value = localStorage.getItem(STORAGE_KEY); if (value) return parseWorkspace(value); }
@@ -47,7 +52,7 @@ export default function App() {
   const [collectionSection, setCollectionSection] = useState<CollectionSection>('overview');
   const [emptyDraft] = useState(newDraft);
   const [editorTab, setEditorTab] = useState<EditorTab>('Params');
-  const [responseTab, setResponseTab] = useState<'Body' | 'Headers'>('Body');
+  const [responseTab, setResponseTab] = useState<'Body' | 'Headers' | 'Tests'>('Body');
   const [pretty, setPretty] = useState(true);
   const [results, setResults] = useState<Record<string, Result>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -57,6 +62,7 @@ export default function App() {
   const [modal, setModal] = useState<'save' | 'collection' | 'environment' | 'curl' | 'import' | 'rename' | 'move' | 'shortcuts' | 'about' | 'engine' | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [importText, setImportText] = useState('');
+  const [runnerCollectionId, setRunnerCollectionId] = useState<string | null>(null);
   const [pendingImport, setPendingImport] = useState<Workspace | null>(null);
   const [dialogError, setDialogError] = useState('');
   const [draggingImport, setDraggingImport] = useState(false);
@@ -105,7 +111,7 @@ export default function App() {
   useEffect(() => { void checkBackend(); return () => controller.current?.abort(); }, []);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if (modal || confirmation) return;
+      if (modal || confirmation || runnerCollectionId) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); if (hasRequest) saveRequest(); }
       if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !busyId && hasRequest) { event.preventDefault(); void sendRequest(); }
       const target = event.target as HTMLElement;
@@ -200,20 +206,11 @@ export default function App() {
     setResults(current => ({ ...current, [id]: {} }));
     const history = { id: crypto.randomUUID(), date: new Date().toISOString(), request: snapshot };
     try {
-      const files = await readRequestFiles(snapshot, abort.signal);
-      const request = prepareWorkspaceRequest(workspace, snapshot, files);
-      const payloadBody = JSON.stringify(request);
-      if (new TextEncoder().encode(payloadBody).byteLength > MAX_API_BYTES) throw new Error('Request payload exceeds the 16 MB transport limit. Reduce the body or attached files.');
-      abort.signal.throwIfAborted();
-      const result = await fetch('/api/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payloadBody, signal: abort.signal });
-      if (!result.headers.get('content-type')?.includes('application/json')) {
-        throw new Error(result.status === 413 ? 'Request exceeds the 16 MB transport limit.' : 'The request engine is unavailable. Start the backend and try again.');
-      }
-      const payload = await result.json();
-      if (!result.ok) throw new Error(payload.error || 'Unable to execute request.');
-      const response = payload as HttpResponse;
-      setResults(current => ({ ...current, [id]: { response } }));
-      setWorkspace(current => ({ ...current, history: [{ ...history, status: response.status, durationMs: response.durationMs }, ...current.history].slice(0, 100) }));
+      const files = Object.fromEntries(await readRequestFiles(snapshot, abort.signal));
+      const outcome = await executeAutomation({ request: snapshot, globals: workspace.variables, collection, files }, abort.signal);
+      setResults(current => ({ ...current, [id]: outcome }));
+      setWorkspace(current => ({ ...applyVariableChanges(current, outcome.changes, collection?.id), history: [{ ...history, status: outcome.response?.status, durationMs: outcome.response?.durationMs, error: outcome.error }, ...current.history].slice(0, 100) }));
+      if (outcome.error || outcome.tests.some(test => !test.passed)) setResponseTab('Tests');
       setBackend('online');
     } catch (error) {
       const message = abort.signal.aborted ? 'Request cancelled.' : error instanceof TypeError ? 'Could not reach the request engine. Check that the backend is running.' : error instanceof Error ? error.message : 'Unable to send the request.';
@@ -309,6 +306,8 @@ export default function App() {
     return [
       { label: 'Open overview', icon: 'layers', onSelect: () => openCollection(collection.id) },
       { label: 'Collection variables', icon: 'globe', onSelect: () => openCollection(collection.id, 'variables') },
+      { label: 'Collection scripts', icon: 'code', onSelect: () => openCollection(collection.id, 'scripts') },
+      { label: 'Run collection', icon: 'send', disabled: !requests.length || !!busyId, onSelect: () => setRunnerCollectionId(collection.id) },
       { label: 'New request', icon: 'plus', onSelect: () => createCollectionRequest(collection.id), separator: true },
       { label: 'Rename collection', icon: 'edit', onSelect: () => renameItem('collection', collection.id, collection.name) },
       { label: 'Duplicate collection', icon: 'copy', onSelect: () => {
@@ -440,7 +439,7 @@ export default function App() {
         <button className="icon-button new-tab" aria-label="New request" title="New request" onClick={addRequest}><Icon name="plus" size={18} /></button>
       </div>}
 
-      {activeOverview ? <CollectionOverview key={activeOverview.id} collection={activeOverview} requests={workspace.saved.filter(item => item.collectionId === activeOverview.id).map(item => item.request)} globals={workspace.variables} section={collectionSection} onSectionChange={setCollectionSection} onChange={changes => setWorkspace(current => ({ ...current, collections: current.collections.map(item => item.id === activeOverview.id ? { ...item, ...changes } : item) }))} onOpenRequest={openRequest} onNewRequest={() => createCollectionRequest(activeOverview.id)} onGlobals={() => setModal('environment')} actions={collectionActions(activeOverview)} requestActions={request => requestActions(request, activeOverview)} /> : hasRequest ? <div className="request-workspace">
+      {activeOverview ? <CollectionOverview key={activeOverview.id} collection={activeOverview} requests={workspace.saved.filter(item => item.collectionId === activeOverview.id).map(item => item.request)} globals={workspace.variables} section={collectionSection} onSectionChange={setCollectionSection} onChange={changes => setWorkspace(current => ({ ...current, collections: current.collections.map(item => item.id === activeOverview.id ? { ...item, ...changes } : item) }))} onOpenRequest={openRequest} onNewRequest={() => createCollectionRequest(activeOverview.id)} onGlobals={() => setModal('environment')} onRun={() => { if (busyId) setToast('Cancel the current request before running a collection.'); else setRunnerCollectionId(activeOverview.id); }} actions={collectionActions(activeOverview)} requestActions={request => requestActions(request, activeOverview)} /> : hasRequest ? <div className="request-workspace">
         <div className="request-heading"><div className="request-location"><Icon name="folder" size={16} /><button className="request-collection-link" disabled={!collection} onClick={() => collection && openCollection(collection.id)}>{collection?.name || 'Scratchpad'}</button><Icon name="chevron" size={12} /><input aria-label="Request name" value={draft.name} onChange={event => updateDraft({ name: event.target.value })} /></div><div className="request-actions"><button className="text-button code-button" title="Generate cURL command" onClick={() => setModal('curl')}><Icon name="code" size={16} /> Code</button><button className="button button-secondary save-button" onClick={saveRequest}><Icon name="save" size={15} /> Save{dirty && <span className="unsaved-dot" />}</button></div></div>
         <form className="url-bar" onSubmit={event => { event.preventDefault(); void sendRequest(); }}>
           <div className="url-input-group"><select className={`method-select method-${draft.method.toLowerCase()}`} aria-label="HTTP method" value={draft.method} onChange={event => updateDraft({ method: event.target.value })}>{METHODS.map(method => <option key={method}>{method}</option>)}</select><div className="url-divider" /><input className="url-input" aria-label="Request URL" placeholder="Enter a URL or paste an endpoint" value={draft.url} onChange={event => updateDraft({ url: event.target.value })} spellCheck={false} autoComplete="off" /><span className="url-protocol"><Icon name="lock" size={14} /></span></div>
@@ -451,20 +450,22 @@ export default function App() {
           {collection && <><button onClick={() => openCollection(collection.id, 'variables')} title="Edit collection variables">{collection.name}</button><Icon name="chevron" size={12} /></>}
           <button onClick={() => setModal('environment')}>Global environment</button><span>{effectiveVariables.length} effective variable{effectiveVariables.length === 1 ? '' : 's'}</span>
         </div>
-        <div className={`request-editor ${editorTab === 'Body' ? 'body-active' : ''}`}><nav className="editor-tabs" aria-label="Request configuration">{(['Params', 'Headers', 'Body', 'Auth', 'Settings'] as EditorTab[]).map(tab => <button key={tab} className={editorTab === tab ? 'active' : ''} onClick={() => setEditorTab(tab)}>{tab}{tab === 'Params' && count(draft.params) > 0 && <span className="tab-count">{count(draft.params)}</span>}{tab === 'Headers' && count(draft.headers) > 0 && <span className="tab-count">{count(draft.headers)}</span>}{tab === 'Auth' && draft.authType !== 'none' && <Icon name="lock" size={11} />}{tab === 'Body' && draft.bodyType !== 'none' && !['GET', 'HEAD'].includes(draft.method) && <span className="configured-dot" />}</button>)}<span className="editor-hint">Use <code>{'{{variables}}'}</code> anywhere</span></nav>
+        <div className={`request-editor ${['Body', 'Scripts', 'Tests'].includes(editorTab) ? 'body-active' : ''}`}><nav className="editor-tabs" aria-label="Request configuration">{(['Params', 'Headers', 'Body', 'Auth', 'Scripts', 'Tests', 'Settings'] as EditorTab[]).map(tab => <button key={tab} className={editorTab === tab ? 'active' : ''} onClick={() => setEditorTab(tab)}>{tab}{tab === 'Params' && count(draft.params) > 0 && <span className="tab-count">{count(draft.params)}</span>}{tab === 'Headers' && count(draft.headers) > 0 && <span className="tab-count">{count(draft.headers)}</span>}{tab === 'Auth' && draft.authType !== 'none' && <Icon name="lock" size={11} />}{tab === 'Body' && draft.bodyType !== 'none' && !['GET', 'HEAD'].includes(draft.method) && <span className="configured-dot" />}</button>)}<span className="editor-hint">Use <code>{'{{variables}}'}</code> anywhere</span></nav>
           <div className="editor-content">
             {editorTab === 'Params' && <><div className="panel-label">Query parameters <span>Added to the URL when you send</span></div><KeyValueEditor rows={draft.params} onChange={params => updateDraft({ params })} /></>}
             {editorTab === 'Headers' && <><div className="panel-label">Request headers <span>Only checked rows are sent</span></div><KeyValueEditor rows={draft.headers} kind="header" onChange={headers => updateDraft({ headers })} /></>}
             {editorTab === 'Body' && <BodyEditor key={draft.id} draft={draft} onChange={updateDraft} />}
+            {editorTab === 'Scripts' && <ScriptEditor value={draft} onChange={updateDraft} />}
+            {editorTab === 'Tests' && <ChecksEditor value={draft} onChange={updateDraft} />}
             {editorTab === 'Auth' && <div className="auth-panel"><div className="auth-type"><label className="field-label" htmlFor="auth-type">Authorization type</label><select id="auth-type" className="field-input" value={draft.authType} onChange={event => updateDraft({ authType: event.target.value as Draft['authType'] })}><option value="none">No authentication</option><option value="bearer">Bearer token</option><option value="basic">Basic authentication</option></select><p>Authorization is added to the request headers automatically.</p></div><div className="auth-fields">{draft.authType === 'none' ? <div className="auth-empty"><Icon name="lock" size={25} /><p>This request does not use authentication.</p></div> : draft.authType === 'bearer' ? <label className="field-label">Token<input className="field-input" type="password" autoComplete="off" placeholder="Enter token or {{token}}" value={draft.token} onChange={event => updateDraft({ token: event.target.value })} /></label> : <><label className="field-label">Username<input className="field-input" autoComplete="off" value={draft.username} onChange={event => updateDraft({ username: event.target.value })} /></label><label className="field-label">Password<input className="field-input" type="password" autoComplete="off" value={draft.password} onChange={event => updateDraft({ password: event.target.value })} /></label></>}</div></div>}
             {editorTab === 'Settings' && <div className="settings-panel"><div><label className="field-label" htmlFor="timeout">Request timeout</label><p>Time to wait before cancelling the request.</p></div><label className="timeout-input"><input id="timeout" type="number" min="0.1" max="60" step="0.1" value={draft.timeoutMs / 1000} onChange={event => updateDraft({ timeoutMs: Number(event.target.value) * 1000 })} /><span>seconds</span></label><div><strong>Follow redirects</strong><p>Automatically follow HTTP redirect responses.</p></div><input className="toggle-check" aria-label="Follow redirects" type="checkbox" checked={draft.followRedirects} onChange={event => updateDraft({ followRedirects: event.target.checked })} /></div>}
           </div>
         </div>
 
         <section className="response-panel" aria-label="Response"><div className="response-heading"><div className="response-title"><Icon name="terminal" size={17} /><strong>Response</strong>{response && <span className={`response-status ${response.status < 400 ? 'status-success' : 'status-error'}`}>{response.status} {response.statusText}</span>}</div>{response ? <div className="response-metrics"><span><Icon name="history" size={13} />{response.durationMs} <small>ms</small></span><span><Icon name="file" size={13} />{formatSize(response.size)}</span><button className="icon-button" title="Download response" aria-label="Download response" onClick={downloadResponse}><Icon name="download" size={16} /></button></div> : <span className="response-placeholder-label">{busyId === draft.id ? 'REQUEST IN PROGRESS' : 'READY WHEN YOU ARE'}</span>}</div>
-          {busyId === draft.id ? <div className="response-empty" role="status"><div className="sending-orbit"><Icon name="send" size={28} /></div><h2>On its way.</h2><p>Waiting for your server to respond…</p><button className="text-button" onClick={() => controller.current?.abort()}>Cancel request</button></div> : result?.error ? <div className="response-empty error-state" role="alert"><div className="empty-illustration"><Icon name="alert" size={28} /></div><h2>{result.error === 'Request cancelled.' ? 'Request cancelled' : 'Something needs a second look'}</h2><p>{result.error}</p><button className="button button-secondary" onClick={() => void sendRequest()}><Icon name="send" size={14} /> Try again</button></div> : response ? <>
-            <div className="response-toolbar"><nav aria-label="Response view"><button className={responseTab === 'Body' ? 'active' : ''} onClick={() => setResponseTab('Body')}>Body</button><button className={responseTab === 'Headers' ? 'active' : ''} onClick={() => setResponseTab('Headers')}>Headers <span>{response.headers.length}</span></button></nav><div className="response-view-actions">{responseTab === 'Body' && response.encoding === 'utf8' && <div className="segmented-control"><button className={pretty ? 'active' : ''} onClick={() => setPretty(true)}>Pretty</button><button className={!pretty ? 'active' : ''} onClick={() => setPretty(false)}>Raw</button></div>}<button className="icon-button" title="Copy response" aria-label="Copy response" onClick={() => void copy(responseTab === 'Headers' ? response.headers.map(header => `${header.name}: ${header.value}`).join('\n') : formatBody(response, pretty))}><Icon name="copy" size={15} /></button></div></div>
-            <div className="response-content">{responseTab === 'Headers' ? <div className="response-headers">{response.headers.map((header, index) => <div key={index}><span>{header.name}</span><span>{header.value}</span></div>)}</div> : response.encoding === 'base64' ? <div className="response-empty"><Icon name="file" size={32} /><h2>Binary response</h2><p>{formatSize(response.size)} received. Download the response to open it.</p><button className="button button-secondary" onClick={downloadResponse}><Icon name="download" size={15} /> Download</button></div> : !response.body ? <div className="response-empty"><Icon name="check" size={28} /><h2>Request complete</h2><p>The server returned an empty response body.</p></div> : <CodeView text={formatBody(response, pretty)} highlight={pretty && response.headers.some(header => header.name.toLowerCase() === 'content-type' && header.value.includes('json'))} />}</div>
+          {busyId === draft.id ? <div className="response-empty" role="status"><div className="sending-orbit"><Icon name="send" size={28} /></div><h2>On its way.</h2><p>Waiting for your server to respond…</p><button className="text-button" onClick={() => controller.current?.abort()}>Cancel request</button></div> : result?.error && !response ? <div className="response-empty error-state" role="alert"><div className="empty-illustration"><Icon name="alert" size={28} /></div><h2>{result.error === 'Request cancelled.' ? 'Request cancelled' : 'Something needs a second look'}</h2><p>{result.error}</p><button className="button button-secondary" onClick={() => void sendRequest()}><Icon name="send" size={14} /> Try again</button></div> : response ? <>
+            <div className="response-toolbar"><nav aria-label="Response view"><button className={responseTab === 'Body' ? 'active' : ''} onClick={() => setResponseTab('Body')}>Body</button><button className={responseTab === 'Headers' ? 'active' : ''} onClick={() => setResponseTab('Headers')}>Headers <span>{response.headers.length}</span></button><button className={responseTab === 'Tests' ? 'active' : ''} onClick={() => setResponseTab('Tests')}>Tests <span>{result?.tests?.length || 0}</span></button></nav><div className="response-view-actions">{responseTab === 'Body' && response.encoding === 'utf8' && <div className="segmented-control"><button className={pretty ? 'active' : ''} onClick={() => setPretty(true)}>Pretty</button><button className={!pretty ? 'active' : ''} onClick={() => setPretty(false)}>Raw</button></div>}<button className="icon-button" title="Copy response" aria-label="Copy response" onClick={() => void copy(responseTab === 'Tests' ? JSON.stringify({ tests: result?.tests, logs: result?.logs, error: result?.error }, null, 2) : responseTab === 'Headers' ? response.headers.map(header => `${header.name}: ${header.value}`).join('\n') : formatBody(response, pretty))}><Icon name="copy" size={15} /></button></div></div>
+            <div className="response-content">{responseTab === 'Tests' ? <AutomationResults tests={result?.tests} logs={result?.logs} error={result?.error} /> : responseTab === 'Headers' ? <div className="response-headers">{response.headers.map((header, index) => <div key={index}><span>{header.name}</span><span>{header.value}</span></div>)}</div> : response.encoding === 'base64' ? <div className="response-empty"><Icon name="file" size={32} /><h2>Binary response</h2><p>{formatSize(response.size)} received. Download the response to open it.</p><button className="button button-secondary" onClick={downloadResponse}><Icon name="download" size={15} /> Download</button></div> : !response.body ? <div className="response-empty"><Icon name="check" size={28} /><h2>Request complete</h2><p>The server returned an empty response body.</p></div> : <CodeView text={formatBody(response, pretty)} highlight={pretty && response.headers.some(header => header.name.toLowerCase() === 'content-type' && header.value.includes('json'))} />}</div>
             <div className="response-url" title={response.url}><Icon name="globe" size={11} />{response.url}</div>
           </> : <div className="response-empty"><div className="empty-art"><div className="empty-art-orbit orbit-one" /><div className="empty-art-orbit orbit-two" /><div className="empty-illustration"><Icon name="send" size={28} /></div><span className="art-spark spark-one" /><span className="art-spark spark-two" /></div><h2>A little curiosity. A new request.</h2><p>Enter an endpoint, make it yours, and hit Send.<br />Your response will land right here.</p><div className="shortcut-hint"><kbd>Ctrl</kbd><span>+</span><kbd>Enter</kbd><span>to send a request</span></div></div>}
         </section>
@@ -475,6 +476,7 @@ export default function App() {
       </footer>
     </main>
 
+    {runnerCollectionId && <CollectionRunner workspace={workspace} collectionId={runnerCollectionId} onClose={() => setRunnerCollectionId(null)} onWorkspaceChange={setWorkspace} />}
     {toast && <div className="toast" role="status"><Icon name="check" size={17} /><span>{toast}</span><button className="icon-button" aria-label="Dismiss notification" onClick={() => setToast('')}><Icon name="close" size={14} /></button></div>}
     {modal === 'save' && <Modal title="Save request" onClose={() => setModal(null)}>
       <form noValidate onSubmit={event => { event.preventDefault(); if (!saveName.trim()) { setDialogError('Enter a request name.'); return; } if (collectionId) persistRequest(saveName, collectionId); }}>

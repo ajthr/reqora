@@ -20,6 +20,7 @@ Web URL:       http://127.0.0.1:5174
 Stop web:      ~/.local/bin/reqora-web stop
 Web status:    ~/.local/bin/reqora-web status
 Uninstall:     ~/.local/bin/reqora-uninstall
+Collection CLI: ~/.local/bin/reqora-run --help
 
 Add ~/.local/bin to PATH for shorter commands. The web runtime is bundled; Node.js
 and Docker are not required. Web runs on demand, not automatically at login.

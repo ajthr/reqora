@@ -12,5 +12,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["server", "shared", "tests"]
+  "include": ["server", "shared", "cli", "tests"]
 }

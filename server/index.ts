@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { executeRequest, RequestError } from './execute.ts';
 import { MAX_API_BYTES } from '../shared/body.ts';
+import { runRequest } from './pipeline.ts';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -22,7 +23,7 @@ export function createReqoraServer(options: { staticDirectory?: string } = {}) {
         json(200, { status: 'ok', name: 'Reqora' });
         return;
       }
-      if (url.pathname === '/api/execute') {
+      if (url.pathname === '/api/execute' || url.pathname === '/api/run-request') {
         if (request.method !== 'POST') {
           response.setHeader('Allow', 'POST');
           json(405, { error: 'Use POST to execute a request.' });
@@ -48,7 +49,7 @@ export function createReqoraServer(options: { staticDirectory?: string } = {}) {
         const controller = new AbortController();
         const cancel = () => { if (!response.writableEnded) controller.abort(); };
         response.once('close', cancel);
-        try { json(200, await executeRequest(input, controller.signal)); }
+        try { json(200, await (url.pathname === '/api/run-request' ? runRequest(input, controller.signal) : executeRequest(input, controller.signal))); }
         finally { response.off('close', cancel); }
         return;
       }

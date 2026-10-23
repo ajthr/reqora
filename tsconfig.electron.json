@@ -14,5 +14,5 @@
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true
   },
-  "include": ["electron", "server/index.ts", "server/execute.ts", "shared"]
+  "include": ["electron", "server", "cli", "shared"]
 }

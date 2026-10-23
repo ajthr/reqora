@@ -26,9 +26,11 @@
     "package:desktop": "npm run package -- --mode desktop",
     "package:web": "npm run package -- --mode web",
     "package:all": "npm run package -- --mode both",
-    "test:packages": "node scripts/smoke-install.mjs"
+    "test:packages": "node scripts/smoke-install.mjs",
+    "cli": "node cli/reqora.mjs"
   },
   "dependencies": {
+    "quickjs-emscripten": "0.32.0",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },
@@ -42,5 +44,8 @@
     "fake-indexeddb": "6.2.6",
     "typescript": "5.9.3",
     "vite": "8.3.4"
+  },
+  "bin": {
+    "reqora": "cli/reqora.mjs"
   }
 }

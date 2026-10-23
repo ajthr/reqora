@@ -46,7 +46,7 @@ case "$bin_dir" in "$prefix"/*) echo 'The launcher directory must be outside the
 if [ -n "$(ls -A "$prefix")" ] && [ "$(cat "$prefix/.reqora-install" 2>/dev/null || true)" != reqora-install-v1 ]; then
   echo 'The installation directory contains unrelated files; choose another --prefix.' >&2; exit 1
 fi
-for name in reqora reqora-web reqora-uninstall; do
+for name in reqora reqora-web reqora-run reqora-uninstall; do
   if [ -e "$bin_dir/$name" ] || [ -L "$bin_dir/$name" ]; then
     [ "$(sed -n '2p' "$bin_dir/$name")" = "# Reqora managed launcher: $prefix" ] || {
       echo "Refusing to replace an unrelated launcher: $bin_dir/$name" >&2; exit 1;
@@ -111,8 +111,16 @@ EOF
   fi
 fi
 if [ "$mode" != desktop ]; then launcher reqora-web "$prefix/web/runtime/node" "$prefix/web/cli.mjs"; fi
+if [ "$mode" != desktop ]; then
+  launcher reqora-run "$prefix/web/runtime/node" "$prefix/web/app/cli/main.js"
+elif [ "$platform" = linux ]; then
+  launcher reqora-run /usr/bin/env ELECTRON_RUN_AS_NODE=1 "$prefix/desktop/reqora" "$prefix/desktop/resources/app/dist-electron/cli/main.js"
+else
+  launcher reqora-run /usr/bin/env ELECTRON_RUN_AS_NODE=1 "$prefix/desktop/Reqora.app/Contents/MacOS/reqora" "$prefix/desktop/Reqora.app/Contents/Resources/app/dist-electron/cli/main.js"
+fi
 launcher reqora-uninstall /bin/sh "$prefix/uninstall.sh"
 printf 'Installed Reqora (%s) in %s\n' "$mode" "$prefix"
 [ "$mode" = web ] || echo "Desktop: $bin_dir/reqora"
 [ "$mode" = desktop ] || printf 'Web: %s/reqora-web open\nStop web: %s/reqora-web stop\n' "$bin_dir" "$bin_dir"
 printf 'Uninstall: %s/reqora-uninstall\nAdd %s to PATH if needed.\n' "$bin_dir" "$bin_dir"
+printf 'Collection CLI: %s/reqora-run --help\n' "$bin_dir"

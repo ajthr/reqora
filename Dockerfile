@@ -11,6 +11,11 @@ RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run typecheck && npm test && npm run build
 
+FROM node:24-alpine AS runtime-deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+
 FROM node:24-alpine AS api
 
 WORKDIR /app
@@ -18,6 +23,8 @@ ENV NODE_ENV=production HOST=0.0.0.0 PORT=3001
 COPY --chown=node:node server ./server
 COPY --chown=node:node shared ./shared
 COPY --chown=node:node package.json ./
+COPY --from=runtime-deps --chown=node:node /app/node_modules ./node_modules
+COPY --chown=node:node cli ./cli
 USER node
 EXPOSE 3001
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \

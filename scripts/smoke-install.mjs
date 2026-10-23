@@ -7,6 +7,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { initialWorkspace, newDraft } from '../shared/workspace.ts';
 
 const exec = promisify(execFile);
 const requested = process.argv[2] || 'all';
@@ -53,6 +54,19 @@ for (const mode of modes) {
         });
         assert.equal(result.status, 200);
         assert.match((await result.json()).body, /packagedRequest/);
+        const request = { ...newDraft(), name: 'Packaged automation', url: `http://127.0.0.1:${fixture.address().port}/`, postResponseScript: 'rq.test("Packaged QuickJS", () => rq.expect(rq.response.json().packagedRequest).toBe(true));' };
+        const outcome = await fetch(`${base}/api/run-request`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ request, globals: [] }) });
+        assert.equal(outcome.status, 200);
+        const automation = await outcome.json();
+        assert.equal(automation.passed, true, automation.error);
+        assert.equal(automation.tests[0].name, 'Packaged QuickJS');
+        const workspace = initialWorkspace();
+        workspace.saved = [{ collectionId: workspace.collections[0].id, request }];
+        const workspacePath = join(temporary, 'workspace.json');
+        const { writeFile } = await import('node:fs/promises');
+        await writeFile(workspacePath, JSON.stringify(workspace));
+        const cliResult = await exec(runtime, [join(prefix, 'web/app/cli/main.js'), 'run', workspacePath, '--quiet']);
+        assert.match(cliResult.stdout, /1 passed, 0 failed/);
       } finally { await exec(runtime, [cli, 'stop'], { env }); }
     } else await assert.rejects(access(join(prefix, 'web')));
     if (windows) {

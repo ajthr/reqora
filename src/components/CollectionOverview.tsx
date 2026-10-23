@@ -5,8 +5,9 @@ import ActionMenu from './ActionMenu';
 import type { MenuAction } from './ActionMenu';
 import Icon from './Icon';
 import KeyValueEditor from './KeyValueEditor';
+import ScriptEditor from './ScriptEditor';
 
-export type CollectionSection = 'overview' | 'variables';
+export type CollectionSection = 'overview' | 'variables' | 'scripts';
 
 interface Props {
   collection: Collection;
@@ -14,15 +15,16 @@ interface Props {
   globals: Entry[];
   section: CollectionSection;
   onSectionChange: (section: CollectionSection) => void;
-  onChange: (changes: Partial<Pick<Collection, 'description' | 'variables'>>) => void;
+  onChange: (changes: Partial<Pick<Collection, 'description' | 'variables' | 'preRequestScript' | 'postResponseScript'>>) => void;
   onOpenRequest: (request: Draft) => void;
   onNewRequest: () => void;
   onGlobals: () => void;
+  onRun: () => void;
   actions: MenuAction[];
   requestActions: (request: Draft) => MenuAction[];
 }
 
-export default function CollectionOverview({ collection, requests, globals, section, onSectionChange, onChange, onOpenRequest, onNewRequest, onGlobals, actions, requestActions }: Props) {
+export default function CollectionOverview({ collection, requests, globals, section, onSectionChange, onChange, onOpenRequest, onNewRequest, onGlobals, onRun, actions, requestActions }: Props) {
   const [search, setSearch] = useState('');
   const effective = useMemo(() => getVariableScope(globals, collection.variables), [globals, collection.variables]);
   const collectionCount = getVariableScope([], collection.variables).length;
@@ -33,11 +35,12 @@ export default function CollectionOverview({ collection, requests, globals, sect
   return <section className="collection-overview" aria-label={`Collection overview: ${collection.name}`}>
     <div className="collection-page-heading">
       <div className="collection-page-title"><span className="collection-page-icon"><Icon name="folder" size={25} /></span><div><span className="collection-eyebrow">COLLECTION</span><h1>{collection.name}</h1></div></div>
-      <div className="collection-page-actions"><button className="button button-primary" onClick={onNewRequest}><Icon name="plus" size={17} /> New request</button><ActionMenu label={`Options for collection ${collection.name}`} actions={actions} /></div>
+      <div className="collection-page-actions"><button className="button button-secondary" disabled={!requests.length} onClick={onRun}><Icon name="send" size={17} />Run collection</button><button className="button button-primary" onClick={onNewRequest}><Icon name="plus" size={17} /> New request</button><ActionMenu label={`Options for collection ${collection.name}`} actions={actions} /></div>
     </div>
     <nav className="collection-page-tabs" aria-label="Collection sections">
       <button className={section === 'overview' ? 'active' : ''} onClick={() => onSectionChange('overview')}><Icon name="layers" size={16} />Overview</button>
       <button className={section === 'variables' ? 'active' : ''} onClick={() => onSectionChange('variables')}><Icon name="globe" size={16} />Variables<span>{collectionCount}</span></button>
+      <button className={section === 'scripts' ? 'active' : ''} onClick={() => onSectionChange('scripts')}><Icon name="code" size={16} />Scripts</button>
     </nav>
     <div className="collection-page-content">
       {section === 'overview' ? <>
@@ -54,7 +57,7 @@ export default function CollectionOverview({ collection, requests, globals, sect
           <div className="collection-section-title"><h2>Requests <span>{requests.length}</span></h2><label className="collection-request-search"><Icon name="search" size={15} /><input aria-label="Search collection requests" placeholder="Filter requests…" value={search} onChange={event => setSearch(event.target.value)} /></label></div>
           {filtered.length ? <div className="overview-request-list">{filtered.map(request => <div className="overview-request-row" key={request.id}><button onClick={() => onOpenRequest(request)} title={request.url}><span className={`method-label method-${request.method.toLowerCase()}`}>{request.method}</span><strong>{request.name}</strong><code>{request.url || 'No URL yet'}</code><Icon name="arrow" size={15} /></button><ActionMenu label={`Options for request ${request.name}`} actions={requestActions(request)} /></div>)}</div> : <div className="collection-empty-state"><Icon name={search ? 'search' : 'file'} size={28} /><h3>{search ? 'No matching requests' : 'Make your first request'}</h3><p>{search ? 'Try a different name, method, or URL.' : 'Add a request to start exploring this API.'}</p>{!search && <button className="button button-secondary" onClick={onNewRequest}><Icon name="plus" size={15} /> New request</button>}</div>}
         </section>
-      </> : <>
+      </> : section === 'scripts' ? <ScriptEditor collection value={collection} onChange={onChange} /> : <>
         <div className="collection-section-title"><div><h2>Collection variables</h2><p>Values specific to {collection.name}. Reference them with <code>{'{{variable}}'}</code> in requests.</p></div><span className="auto-save-label"><Icon name="check" size={14} />Saved automatically</span></div>
         <div className="variable-hierarchy"><div><Icon name="folder" size={18} /><strong>{collection.name}</strong><span>Higher priority</span></div><Icon name="arrow" size={18} /><button onClick={onGlobals}><Icon name="globe" size={18} /><strong>Global environment</strong><span>Fallback values</span></button></div>
         <p className="variable-rule">Enabled collection values override global values with the same name. Uncheck a collection variable to use its global value. Names are case-sensitive; the last enabled row wins within a scope.</p>
