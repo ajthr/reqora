@@ -35,7 +35,11 @@ for (const mode of modes) {
     if (mode !== 'desktop') {
       const runtime = join(prefix, 'web/runtime', windows ? 'node.exe' : 'node');
       const cli = join(prefix, 'web/cli.mjs');
-      fixture = createServer((_request, response) => { response.setHeader('Content-Type', 'application/json'); response.end('{"packagedRequest":true}'); });
+      fixture = createServer((request, response) => {
+        response.setHeader('Content-Type', 'application/json');
+        response.statusCode = request.headers.authorization?.startsWith('AWS4-HMAC-SHA256 ') && request.headers['x-amz-content-sha256'] ? 200 : 401;
+        response.end('{"packagedRequest":true}');
+      });
       await new Promise(resolve => fixture.listen(0, '127.0.0.1', resolve));
       // Reserve an available web port separately from the request target.
       const reserve = createServer();
@@ -50,17 +54,20 @@ for (const mode of modes) {
         assert.equal((await (await fetch(`${base}/api/health`)).json()).name, 'Reqora');
         const result = await fetch(`${base}/api/execute`, {
           method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base },
-          body: JSON.stringify({ method: 'GET', url: `http://127.0.0.1:${fixture.address().port}/`, headers: [], timeoutMs: 5000, followRedirects: true }),
+          body: JSON.stringify({ method: 'GET', url: `http://127.0.0.1:${fixture.address().port}/`, headers: [], timeoutMs: 5000, followRedirects: true, auth: { authType: 'aws', aws: { accessKeyId: 'test-key', secretAccessKey: 'test-secret', region: 'us-east-1', service: 'execute-api', sessionToken: '' } } }),
         });
         assert.equal(result.status, 200);
-        assert.match((await result.json()).body, /packagedRequest/);
+        const signed = await result.json(); assert.equal(signed.status, 200); assert.match(signed.body, /packagedRequest/);
         const request = { ...newDraft(), name: 'Packaged automation', url: `http://127.0.0.1:${fixture.address().port}/`, postResponseScript: 'rq.test("Packaged QuickJS", () => rq.expect(rq.response.json().packagedRequest).toBe(true));' };
-        const outcome = await fetch(`${base}/api/run-request`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ request, globals: [] }) });
+        const collection = { id: 'packaged', name: 'Packaged', description: '', variables: [], auth: { authType: 'aws', aws: { accessKeyId: 'test-key', secretAccessKey: 'test-secret', region: 'us-east-1', service: 'execute-api', sessionToken: '' } } };
+        request.postResponseScript += ' rq.test("Inherited AWS", () => rq.expect(rq.response.status).toBe(200));';
+        const outcome = await fetch(`${base}/api/run-request`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ request, globals: [], collection }) });
         assert.equal(outcome.status, 200);
         const automation = await outcome.json();
         assert.equal(automation.passed, true, automation.error);
         assert.equal(automation.tests[0].name, 'Packaged QuickJS');
         const workspace = initialWorkspace();
+        workspace.collections = [collection];
         workspace.saved = [{ collectionId: workspace.collections[0].id, request }];
         const workspacePath = join(temporary, 'workspace.json');
         const { writeFile } = await import('node:fs/promises');

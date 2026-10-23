@@ -1,3 +1,5 @@
+import type { AuthConfig } from './auth.ts';
+
 export interface Header {
   name: string;
   value: string;
@@ -19,6 +21,7 @@ export interface HttpRequest {
   body?: RequestBody;
   timeoutMs: number;
   followRedirects: boolean;
+  auth?: AuthConfig;
 }
 
 export interface HttpResponse {

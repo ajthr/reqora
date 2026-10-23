@@ -5,6 +5,7 @@ import type { Assertion, ExecutionInput, ExecutionResult, VariableChange } from 
 import { validateDataRows } from '../shared/data.ts';
 import { getVariableScope, interpolate, isDraft, parseWorkspace, prepareRequest } from '../shared/workspace.ts';
 import type { Collection, Draft, Entry } from '../shared/workspace.ts';
+import { authConfigurationKey } from '../shared/auth.ts';
 
 export function validateExecutionInput(value: unknown): ExecutionInput {
   if (!value || typeof value !== 'object') throw new RequestError('Provide a request and its variable context.');
@@ -71,8 +72,12 @@ export async function runRequest(value: unknown, signal?: AbortSignal): Promise<
     signal?.throwIfAborted();
     await script(input.collection?.preRequestScript, 'Collection pre-request');
     await script(input.request.preRequestScript, 'Request pre-request');
-    const prepared = prepareRequest({ ...request, method: request.method.toUpperCase() }, state.variables, [...(state.collections[0]?.variables || []), ...rowEntries], new Map(Object.entries(input.files || {})));
-    result.response = await executeRequest(prepared, signal);
+    const prepared = prepareRequest({ ...request, method: request.method.toUpperCase() }, state.variables, [...(state.collections[0]?.variables || []), ...rowEntries], new Map(Object.entries(input.files || {})), state.collections[0]?.auth);
+    const inherited = request.authType === 'inherit' && !!input.collection?.auth;
+    result.response = await executeRequest(prepared, signal, { onAuthUpdate: tokens => {
+      result.authUpdates = [{ scope: inherited ? 'collection' : 'request', id: inherited ? input.collection!.id : input.request.id,
+        configurationKey: authConfigurationKey(inherited ? input.collection!.auth : input.request), oauth2: tokens }];
+    } });
     await script(input.collection?.postResponseScript, 'Collection post-response');
     await script(input.request.postResponseScript, 'Request post-response');
     for (const assertion of input.request.assertions) {

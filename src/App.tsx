@@ -12,6 +12,10 @@ import ScriptEditor from './components/ScriptEditor';
 import ChecksEditor from './components/ChecksEditor';
 import AutomationResults from './components/AutomationResults';
 import CollectionRunner from './components/CollectionRunner';
+import AuthEditor from './components/AuthEditor';
+import { applyAuthenticationUpdates, authConfigurationKey, effectiveAuth, normalizedAuth } from '../shared/auth';
+import type { AuthenticationUpdate } from '../shared/auth';
+import { authenticationCurl } from './lib/auth-client';
 import Modal, { ConfirmDialog } from './components/Dialog';
 import type { Confirmation } from './components/Dialog';
 import ActionMenu from './components/ActionMenu';
@@ -19,7 +23,7 @@ import type { MenuAction } from './components/ActionMenu';
 import Startup from './components/Startup';
 import CollectionOverview from './components/CollectionOverview';
 import type { CollectionSection } from './components/CollectionOverview';
-import { closeRequestTab, formatBody, formatSize, getRequestCollection, getVariableScope, initialWorkspace, newDraft, parseWorkspace, workspaceToCurl } from './lib/workspace';
+import { closeRequestTab, formatBody, formatSize, getRequestCollection, getVariableScope, initialWorkspace, newDraft, parseWorkspace } from './lib/workspace';
 import type { Collection, Draft, Workspace } from './lib/workspace';
 import { brandingInteractionProps } from './lib/branding';
 
@@ -52,6 +56,7 @@ export default function App() {
   const [collectionSection, setCollectionSection] = useState<CollectionSection>('overview');
   const [emptyDraft] = useState(newDraft);
   const [editorTab, setEditorTab] = useState<EditorTab>('Params');
+  const [curl, setCurl] = useState('');
   const [responseTab, setResponseTab] = useState<'Body' | 'Headers' | 'Tests'>('Body');
   const [pretty, setPretty] = useState(true);
   const [results, setResults] = useState<Record<string, Result>>({});
@@ -163,6 +168,14 @@ export default function App() {
     setModal('save');
   }
 
+  function updateTabAuthentication(updates: AuthenticationUpdate[]) {
+    setTabs(current => current.map(tab => {
+      const update = updates.find(item => item.scope === 'request' && item.id === tab.id);
+      return update && tab.authType === 'oauth2' && authConfigurationKey(tab) === update.configurationKey
+        ? { ...tab, oauth2: { ...normalizedAuth(tab).oauth2, ...update.oauth2 } } : tab;
+    }));
+  }
+
   function closeTab(id: string, discard = false) {
     if (busyId === id) { setToast('Cancel the running request before closing its tab.'); return; }
     const closing = tabs.find(tab => tab.id === id);
@@ -209,7 +222,8 @@ export default function App() {
       const files = Object.fromEntries(await readRequestFiles(snapshot, abort.signal));
       const outcome = await executeAutomation({ request: snapshot, globals: workspace.variables, collection, files }, abort.signal);
       setResults(current => ({ ...current, [id]: outcome }));
-      setWorkspace(current => ({ ...applyVariableChanges(current, outcome.changes, collection?.id), history: [{ ...history, status: outcome.response?.status, durationMs: outcome.response?.durationMs, error: outcome.error }, ...current.history].slice(0, 100) }));
+      setWorkspace(current => ({ ...applyAuthenticationUpdates(applyVariableChanges(current, outcome.changes, collection?.id), outcome.authUpdates), history: [{ ...history, status: outcome.response?.status, durationMs: outcome.response?.durationMs, error: outcome.error }, ...current.history].slice(0, 100) }));
+      updateTabAuthentication(outcome.authUpdates || []);
       if (outcome.error || outcome.tests.some(test => !test.passed)) setResponseTab('Tests');
       setBackend('online');
     } catch (error) {
@@ -291,8 +305,7 @@ export default function App() {
       } },
       { label: 'Export request', icon: 'download', separator: true, onSelect: () => exportSelection(collection, request.id) },
       { label: 'Copy as cURL', icon: 'code', onSelect: () => {
-        try { void copy(workspaceToCurl(workspace, request), 'cURL command copied.'); }
-        catch (error) { setToast((error as Error).message); }
+        void authenticationCurl(workspace, request).then(command => copy(command, 'cURL command copied.')).catch(error => setToast((error as Error).message));
       } },
       { label: 'Delete request', icon: 'trash', danger: true, separator: true, onSelect: () => setConfirmation({
         title: 'Delete request?', description: `“${request.name}” will be removed from “${collection.name}”. An open tab will remain available as an unsaved request.`, confirmLabel: 'Delete request',
@@ -306,6 +319,7 @@ export default function App() {
     return [
       { label: 'Open overview', icon: 'layers', onSelect: () => openCollection(collection.id) },
       { label: 'Collection variables', icon: 'globe', onSelect: () => openCollection(collection.id, 'variables') },
+      { label: 'Collection authentication', icon: 'lock', onSelect: () => openCollection(collection.id, 'auth') },
       { label: 'Collection scripts', icon: 'code', onSelect: () => openCollection(collection.id, 'scripts') },
       { label: 'Run collection', icon: 'send', disabled: !requests.length || !!busyId, onSelect: () => setRunnerCollectionId(collection.id) },
       { label: 'New request', icon: 'plus', onSelect: () => createCollectionRequest(collection.id), separator: true },
@@ -385,8 +399,13 @@ export default function App() {
     download(`response.${type.includes('json') ? 'json' : type.startsWith('text/') ? 'txt' : 'bin'}`, content, type);
   }
 
-  let curl = '';
-  if (modal === 'curl') { try { curl = workspaceToCurl(workspace, draft); } catch (error) { curl = (error as Error).message; } }
+  useEffect(() => {
+    if (modal !== 'curl') return;
+    const abort = new AbortController();
+    setCurl('Generating command…');
+    void authenticationCurl(workspace, draft, abort.signal).then(command => { if (!abort.signal.aborted) setCurl(command); }).catch(error => { if (!abort.signal.aborted) setCurl((error as Error).message); });
+    return () => abort.abort();
+  }, [modal, draft, workspace]);
 
   return <div className={`app-shell ${sidebarHidden ? 'sidebar-hidden' : ''}`}>
     <aside className="activity-rail" aria-label="Workspace navigation">
@@ -450,14 +469,14 @@ export default function App() {
           {collection && <><button onClick={() => openCollection(collection.id, 'variables')} title="Edit collection variables">{collection.name}</button><Icon name="chevron" size={12} /></>}
           <button onClick={() => setModal('environment')}>Global environment</button><span>{effectiveVariables.length} effective variable{effectiveVariables.length === 1 ? '' : 's'}</span>
         </div>
-        <div className={`request-editor ${['Body', 'Scripts', 'Tests'].includes(editorTab) ? 'body-active' : ''}`}><nav className="editor-tabs" aria-label="Request configuration">{(['Params', 'Headers', 'Body', 'Auth', 'Scripts', 'Tests', 'Settings'] as EditorTab[]).map(tab => <button key={tab} className={editorTab === tab ? 'active' : ''} onClick={() => setEditorTab(tab)}>{tab}{tab === 'Params' && count(draft.params) > 0 && <span className="tab-count">{count(draft.params)}</span>}{tab === 'Headers' && count(draft.headers) > 0 && <span className="tab-count">{count(draft.headers)}</span>}{tab === 'Auth' && draft.authType !== 'none' && <Icon name="lock" size={11} />}{tab === 'Body' && draft.bodyType !== 'none' && !['GET', 'HEAD'].includes(draft.method) && <span className="configured-dot" />}</button>)}<span className="editor-hint">Use <code>{'{{variables}}'}</code> anywhere</span></nav>
+        <div className={`request-editor ${['Body', 'Auth', 'Scripts', 'Tests'].includes(editorTab) ? 'body-active' : ''}`}><nav className="editor-tabs" aria-label="Request configuration">{(['Params', 'Headers', 'Body', 'Auth', 'Scripts', 'Tests', 'Settings'] as EditorTab[]).map(tab => <button key={tab} className={editorTab === tab ? 'active' : ''} onClick={() => setEditorTab(tab)}>{tab}{tab === 'Params' && count(draft.params) > 0 && <span className="tab-count">{count(draft.params)}</span>}{tab === 'Headers' && count(draft.headers) > 0 && <span className="tab-count">{count(draft.headers)}</span>}{tab === 'Auth' && effectiveAuth(draft, collection?.auth).authType !== 'none' && <Icon name="lock" size={11} />}{tab === 'Body' && draft.bodyType !== 'none' && !['GET', 'HEAD'].includes(draft.method) && <span className="configured-dot" />}</button>)}<span className="editor-hint">Use <code>{'{{variables}}'}</code> anywhere</span></nav>
           <div className="editor-content">
             {editorTab === 'Params' && <><div className="panel-label">Query parameters <span>Added to the URL when you send</span></div><KeyValueEditor rows={draft.params} onChange={params => updateDraft({ params })} /></>}
             {editorTab === 'Headers' && <><div className="panel-label">Request headers <span>Only checked rows are sent</span></div><KeyValueEditor rows={draft.headers} kind="header" onChange={headers => updateDraft({ headers })} /></>}
             {editorTab === 'Body' && <BodyEditor key={draft.id} draft={draft} onChange={updateDraft} />}
             {editorTab === 'Scripts' && <ScriptEditor value={draft} onChange={updateDraft} />}
             {editorTab === 'Tests' && <ChecksEditor value={draft} onChange={updateDraft} />}
-            {editorTab === 'Auth' && <div className="auth-panel"><div className="auth-type"><label className="field-label" htmlFor="auth-type">Authorization type</label><select id="auth-type" className="field-input" value={draft.authType} onChange={event => updateDraft({ authType: event.target.value as Draft['authType'] })}><option value="none">No authentication</option><option value="bearer">Bearer token</option><option value="basic">Basic authentication</option></select><p>Authorization is added to the request headers automatically.</p></div><div className="auth-fields">{draft.authType === 'none' ? <div className="auth-empty"><Icon name="lock" size={25} /><p>This request does not use authentication.</p></div> : draft.authType === 'bearer' ? <label className="field-label">Token<input className="field-input" type="password" autoComplete="off" placeholder="Enter token or {{token}}" value={draft.token} onChange={event => updateDraft({ token: event.target.value })} /></label> : <><label className="field-label">Username<input className="field-input" autoComplete="off" value={draft.username} onChange={event => updateDraft({ username: event.target.value })} /></label><label className="field-label">Password<input className="field-input" type="password" autoComplete="off" value={draft.password} onChange={event => updateDraft({ password: event.target.value })} /></label></>}</div></div>}
+            {editorTab === 'Auth' && <AuthEditor key={draft.id} value={draft} collectionAuth={collection?.auth} collectionName={collection?.name} variables={effectiveVariables} onChange={updateDraft} />}
             {editorTab === 'Settings' && <div className="settings-panel"><div><label className="field-label" htmlFor="timeout">Request timeout</label><p>Time to wait before cancelling the request.</p></div><label className="timeout-input"><input id="timeout" type="number" min="0.1" max="60" step="0.1" value={draft.timeoutMs / 1000} onChange={event => updateDraft({ timeoutMs: Number(event.target.value) * 1000 })} /><span>seconds</span></label><div><strong>Follow redirects</strong><p>Automatically follow HTTP redirect responses.</p></div><input className="toggle-check" aria-label="Follow redirects" type="checkbox" checked={draft.followRedirects} onChange={event => updateDraft({ followRedirects: event.target.checked })} /></div>}
           </div>
         </div>
@@ -476,7 +495,7 @@ export default function App() {
       </footer>
     </main>
 
-    {runnerCollectionId && <CollectionRunner workspace={workspace} collectionId={runnerCollectionId} onClose={() => setRunnerCollectionId(null)} onWorkspaceChange={setWorkspace} />}
+    {runnerCollectionId && <CollectionRunner workspace={workspace} collectionId={runnerCollectionId} onClose={() => setRunnerCollectionId(null)} onWorkspaceChange={setWorkspace} onAuthenticationUpdate={updates => { setWorkspace(current => applyAuthenticationUpdates(current, updates)); updateTabAuthentication(updates); }} />}
     {toast && <div className="toast" role="status"><Icon name="check" size={17} /><span>{toast}</span><button className="icon-button" aria-label="Dismiss notification" onClick={() => setToast('')}><Icon name="close" size={14} /></button></div>}
     {modal === 'save' && <Modal title="Save request" onClose={() => setModal(null)}>
       <form noValidate onSubmit={event => { event.preventDefault(); if (!saveName.trim()) { setDialogError('Enter a request name.'); return; } if (collectionId) persistRequest(saveName, collectionId); }}>

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { applyVariableChanges } from '../../shared/automation';
+import { publicRunReport, applyVariableChanges } from '../../shared/automation';
+import type { AuthenticationUpdate } from '../../shared/auth';
 import type { RunReport, RunnerOptions } from '../../shared/automation';
 import { parseRunData } from '../../shared/data';
 import { planRun, runCollection } from '../../shared/runner';
@@ -10,8 +11,8 @@ import Dialog from './Dialog';
 import AutomationResults from './AutomationResults';
 import Icon from './Icon';
 
-export default function CollectionRunner({ workspace, collectionId, onClose, onWorkspaceChange }: {
-  workspace: Workspace; collectionId: string; onClose: () => void; onWorkspaceChange: (update: (workspace: Workspace) => Workspace) => void;
+export default function CollectionRunner({ workspace, collectionId, onClose, onWorkspaceChange, onAuthenticationUpdate }: {
+  workspace: Workspace; collectionId: string; onClose: () => void; onWorkspaceChange: (update: (workspace: Workspace) => Workspace) => void; onAuthenticationUpdate: (updates: AuthenticationUpdate[]) => void;
 }) {
   const collection = workspace.collections.find(item => item.id === collectionId)!;
   const requests = workspace.saved.filter(item => item.collectionId === collectionId).map(item => item.request);
@@ -43,6 +44,7 @@ export default function CollectionRunner({ workspace, collectionId, onClose, onW
       const result = await runCollection(snapshot, collectionId, options, {
         execute: executeAutomation, signal: controller.signal,
         files: async (request, signal) => Object.fromEntries(await readRequestFiles(request, signal)),
+        onAuthenticationUpdate,
         onResult: (_item, progress) => { if (mounted.current) setReport({ ...progress, results: [...progress.results], changes: [...progress.changes] }); },
       });
       if (mounted.current) {
@@ -60,7 +62,7 @@ export default function CollectionRunner({ workspace, collectionId, onClose, onW
   }
   function exportReport() {
     if (!report) return;
-    const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));
+    const url = URL.createObjectURL(new Blob([JSON.stringify(publicRunReport(report), null, 2)], { type: 'application/json' }));
     const link = document.createElement('a'); link.href = url; link.download = 'reqora-run-report.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   const move = (index: number, direction: number) => {

@@ -1,6 +1,12 @@
 import type { HttpRequest, HttpResponse, MultipartPart, RequestBody, UploadFile } from '../shared/types.ts';
 import { validateHeaderValue } from 'node:http';
 import { base64ByteLength, isFileName, isMediaType, MAX_BODY_BYTES, MAX_BODY_FIELDS } from '../shared/body.ts';
+import { isAuthConfig, effectiveAuth } from '../shared/auth.ts';
+import type { OAuth2Tokens } from '../shared/auth.ts';
+import { AuthenticationError } from './auth-error.ts';
+import { authenticate } from './request-auth.ts';
+import { digestChallenge } from './auth-signing.ts';
+import { usableOAuth2 } from './oauth.ts';
 
 export const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 
@@ -79,10 +85,12 @@ export function validateRequest(input: unknown): HttpRequest {
     throw new RequestError('Timeout must be between 100 and 60000 milliseconds.');
   }
   if (typeof value.followRedirects !== 'boolean') throw new RequestError('Redirect handling must be true or false.');
-  return { url: url.href, method, headers, body, timeoutMs: value.timeoutMs, followRedirects: value.followRedirects };
+  if (value.auth !== undefined && !isAuthConfig(value.auth, false)) throw new RequestError('Invalid authentication configuration.');
+  return { url: url.href, method, headers, body, timeoutMs: value.timeoutMs, followRedirects: value.followRedirects,
+    ...(value.auth !== undefined ? { auth: effectiveAuth(value.auth as HttpRequest['auth'] & {}, undefined) } : {}) };
 }
 
-export async function executeRequest(input: unknown, signal?: AbortSignal): Promise<HttpResponse> {
+export async function executeRequest(input: unknown, signal?: AbortSignal, options: { onAuthUpdate?: (tokens: OAuth2Tokens) => void } = {}): Promise<HttpResponse> {
   const request = validateRequest(input);
   const started = performance.now();
   const timeout = AbortSignal.timeout(request.timeoutMs);
@@ -107,13 +115,49 @@ export async function executeRequest(input: unknown, signal?: AbortSignal): Prom
       if (body.byteLength > MAX_BODY_BYTES) throw new RequestError('Request body exceeds the 10 MB limit, including multipart fields and boundaries.', 413);
       headers.set('Content-Type', encoded.headers.get('content-type')!);
     }
-    const response = await fetch(request.url, {
-      method: request.method,
-      headers,
-      body,
-      redirect: request.followRedirects ? 'follow' : 'manual',
-      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-    });
+    const activeSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    let url = new URL(request.url), method = request.method, auth = request.auth;
+    let response: Response;
+    let redirects = 0;
+    while (true) {
+      let outgoing = new Headers(headers);
+      await authenticate(method, url, outgoing, body, auth, activeSignal, options.onAuthUpdate);
+      const send = () => fetch(url, { method, headers: outgoing, body, redirect: 'manual', signal: activeSignal });
+      response = await send();
+      if (auth?.authType === 'digest') for (let attempt = 0; response.status === 401 && attempt < 2; attempt++) {
+        const challenge = digestChallenge(response.headers.get('www-authenticate') || '');
+        if (!challenge || attempt > 0 && challenge.stale?.toLowerCase() !== 'true') break;
+        await response.body?.cancel(); outgoing = new Headers(headers);
+        await authenticate(method, url, outgoing, body, auth, activeSignal, undefined, challenge);
+        response = await send();
+      }
+      if (auth?.authType === 'oauth2' && response.status === 401 && auth.oauth2!.autoRefresh && (auth.oauth2!.refreshToken || auth.oauth2!.grantType === 'client_credentials')) {
+        await response.body?.cancel();
+        const refreshed = await usableOAuth2(auth.oauth2!, activeSignal, true);
+        Object.assign(auth.oauth2!, refreshed.tokens); options.onAuthUpdate?.(refreshed.tokens);
+        outgoing = new Headers(headers); await authenticate(method, url, outgoing, body, auth, activeSignal, options.onAuthUpdate);
+        response = await send();
+      }
+      const location = response.headers.get('location');
+      if (!request.followRedirects || ![301, 302, 303, 307, 308].includes(response.status) || !location) break;
+      await response.body?.cancel();
+      if (++redirects > 10) throw new RequestError('Request exceeded the 10 redirect limit.', 502);
+      const next = new URL(location, url);
+      if (!['http:', 'https:'].includes(next.protocol) || next.username || next.password) throw new RequestError('Redirects must use HTTP or HTTPS without URL credentials.', 502);
+      if (next.origin !== url.origin) {
+        for (const name of ['authorization', 'proxy-authorization', 'cookie', 'cookie2', 'x-amz-security-token', 'x-amz-date', 'x-amz-content-sha256']) headers.delete(name);
+        if (auth?.authType === 'apikey') {
+          if (auth.apiKey!.location === 'header') headers.delete(auth.apiKey!.name);
+          else next.searchParams.delete(auth.apiKey!.name);
+        }
+        auth = undefined;
+      }
+      if (response.status === 303 && method !== 'HEAD' || [301, 302].includes(response.status) && method === 'POST') {
+        method = 'GET'; body = undefined;
+        for (const name of ['content-type', 'content-encoding', 'content-language', 'content-location']) headers.delete(name);
+      }
+      url = next;
+    }
     const chunks: Uint8Array[] = [];
     let size = 0;
     if (response.body) {
@@ -152,6 +196,7 @@ export async function executeRequest(input: unknown, signal?: AbortSignal): Prom
     if (error instanceof RequestError) throw error;
     if (timeout.aborted) throw new RequestError(`Request timed out after ${request.timeoutMs / 1000} seconds.`, 504);
     if (signal?.aborted) throw new RequestError('Request cancelled.', 499);
+    if (error instanceof AuthenticationError) throw new RequestError(error.message, 400);
     throw new RequestError('Unable to connect to the server. Check the URL, network connection, and TLS certificate.', 502);
   }
 }

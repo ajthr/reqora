@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu } from 'electron';
+import { app, BrowserWindow, Menu, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { createReqoraServer } from '../server/index.ts';
 
@@ -19,7 +19,13 @@ function createWindow(): void {
     },
   });
 
-  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === 'https:' || parsed.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname)) void shell.openExternal(parsed.href);
+    } catch { /* Reject non-web authorization links. */ }
+    return { action: 'deny' };
+  });
   window.webContents.on('will-navigate', (event, url) => {
     if (new URL(url).origin !== appUrl) event.preventDefault();
   });

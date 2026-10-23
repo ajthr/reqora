@@ -30,6 +30,8 @@
     "cli": "node cli/reqora.mjs"
   },
   "dependencies": {
+    "@smithy/hash-node": "4.5.2",
+    "@smithy/signature-v4": "5.7.4",
     "quickjs-emscripten": "0.32.0",
     "react": "19.3.1",
     "react-dom": "19.3.1"

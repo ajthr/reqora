@@ -16,7 +16,8 @@ Reqora now has its first working REST workflow: a shared React and TypeScript wo
 - A startup page when no request tabs are open, with quick actions and saved requests. Closing the last tab returns here without creating another request.
 - Shared File, View, Request, and Help menus and an interactive status bar in both web and Electron. Electron's native application menu is removed.
 - GET, POST, PUT, PATCH, DELETE, HEAD, and OPTIONS requests over HTTP and HTTPS.
-- Query parameters, request headers, JSON/XML/text bodies, structured URL-encoded forms, multipart text/file uploads, binary file bodies, and basic/bearer authentication.
+- Query parameters, request headers, JSON/XML/text bodies, structured URL-encoded forms, multipart text/file uploads, and binary file bodies.
+- Basic, bearer, API key, OAuth 2.0 (PKCE/client credentials/refresh), OAuth 1.0a, Digest, and AWS Signature V4 helpers, with inherited collection authentication.
 - Global environment and per-collection variables with `{{variable}}` substitution in URLs, parameters, headers, authentication, and bodies. Collection values take priority over globals, including in generated cURL.
 - Collection overview pages with descriptions, request lists, variable editors, and a resolved-value table showing the source of each effective variable.
 - A server-side request engine with cancellation, configurable timeouts, and optional redirect following.
@@ -71,6 +72,12 @@ Global/collection variables apply to raw content and form field names/text value
 
 See [scripts, assertions, extraction, collection runs, and CLI usage](docs/automation.md) for setup and examples. Run `npm run cli -- --help` for CLI options.
 
+## Authentication
+
+Use a request's **Auth** tab, or a collection's **Auth** section to share credentials. New requests **Inherit from collection**; choose an explicit helper to override it, or **No authentication** to disable inheritance. Existing saved authentication choices are preserved. Credential values support the same variable hierarchy as the request, including data-row overrides during runs.
+
+OAuth helpers can obtain tokens through a browser authorization page or client credentials, and refresh them automatically. Collection runs and the CLI use the same signing/token engine. See [authentication setup and supported flows](docs/authentication.md), including redirect URI registration and CLI token persistence.
+
 ## Platforms and technology
 
 - **Web:** A browser-based REST client.
@@ -81,7 +88,7 @@ The initial scope is REST over HTTP and HTTPS. GraphQL, WebSocket, gRPC, and oth
 
 ## Planned REST capabilities
 
-The goal is comprehensive coverage of the REST workflows available in established clients. This outline includes both the initial features above and work still to come, such as OAuth, cookie management, and OpenAPI/third-party collection imports.
+The goal is comprehensive coverage of the REST workflows available in established clients. This outline includes both the initial features above and work still to come, such as cookie management and OpenAPI/third-party collection imports.
 
 ### Compose and send requests
 

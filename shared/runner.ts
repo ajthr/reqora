@@ -2,6 +2,7 @@ import { applyVariableChanges, MAX_EXECUTIONS } from './automation.ts';
 import type { ExecutionInput, ExecutionResult, RunItem, RunReport, RunnerOptions } from './automation.ts';
 import { validateDataRows } from './data.ts';
 import type { Draft, Workspace } from './workspace.ts';
+import { applyAuthenticationUpdates } from './auth.ts';
 
 export function planRun(workspace: Workspace, collectionId: string, options: RunnerOptions) {
   const collection = workspace.collections.find(item => item.id === collectionId);
@@ -23,6 +24,7 @@ export async function runCollection(workspace: Workspace, collectionId: string, 
   files?: (request: Draft, signal?: AbortSignal) => Promise<Record<string, string>>;
   signal?: AbortSignal;
   onResult?: (item: RunItem, report: RunReport) => void;
+  onAuthenticationUpdate?: (updates: NonNullable<ExecutionResult['authUpdates']>) => void;
 }): Promise<RunReport> {
   const plan = planRun(workspace, collectionId, options);
   let current = structuredClone(workspace);
@@ -30,7 +32,8 @@ export async function runCollection(workspace: Workspace, collectionId: string, 
   const report: RunReport = { version: 1, collectionId, collectionName: plan.collection.name, startedAt: new Date(start).toISOString(), durationMs: 0, planned: plan.planned, completed: 0, passed: 0, failed: 0, cancelled: false, results: [], changes: [] };
   const rows = options.data.length ? options.data : [{}];
   let detailBudget = 8 * 1024 * 1024;
-  outer: for (let pass = 0; pass < options.iterations; pass++) for (let dataIndex = 0; dataIndex < rows.length; dataIndex++) for (const request of plan.requests) {
+  outer: for (let pass = 0; pass < options.iterations; pass++) for (let dataIndex = 0; dataIndex < rows.length; dataIndex++) for (const plannedRequest of plan.requests) {
+    const request = current.saved.find(item => item.request.id === plannedRequest.id)?.request || plannedRequest;
     if (hooks.signal?.aborted) { report.cancelled = true; break outer; }
     if (report.completed && options.delayMs) {
       try { await wait(options.delayMs, hooks.signal); } catch { report.cancelled = true; break outer; }
@@ -43,6 +46,13 @@ export async function runCollection(workspace: Workspace, collectionId: string, 
       if (hooks.signal?.aborted) { report.cancelled = true; break outer; }
       result = { error: (error as Error).message, passed: false, tests: [], logs: [], changes: [] };
     }
+    current = applyAuthenticationUpdates(current, result.authUpdates);
+    for (const update of result.authUpdates || []) {
+      report.authUpdates ??= [];
+      const previous = report.authUpdates.find(item => item.scope === update.scope && item.id === update.id);
+      if (previous) previous.oauth2 = update.oauth2; else report.authUpdates.push({ ...update });
+    }
+    if (result.authUpdates?.length) hooks.onAuthenticationUpdate?.(result.authUpdates);
     if (hooks.signal?.aborted) { report.cancelled = true; break outer; }
     current = applyVariableChanges(current, result.changes, collectionId);
     report.changes = variableDelta(workspace, current, collectionId);
