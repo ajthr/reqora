@@ -1,0 +1,72 @@
+name: Build installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Components to package
+        type: choice
+        default: all
+        options: [all, desktop, web, both]
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: ${{ matrix.os }} / ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, arch: x64 }
+          - { os: ubuntu-22.04-arm, arch: arm64 }
+          - { os: windows-2022, arch: x64 }
+          - { os: windows-11-arm, arch: arm64 }
+          - { os: macos-15-intel, arch: x64 }
+          - { os: macos-15, arch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          architecture: ${{ matrix.arch }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - name: Install Windows wizard compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\NSIS\makensis.exe")) {
+            choco install nsis --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Check tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: node --input-type=module -e 'import fs from "node:fs"; const p = JSON.parse(fs.readFileSync("package.json")); if (process.env.GITHUB_REF_NAME !== `v${p.version}`) throw new Error("Tag must match package.json version");'
+      - name: Build installation packages
+        env:
+          PACKAGE_MODE: ${{ inputs.mode || 'all' }}
+        run: npm run package -- --mode ${{ env.PACKAGE_MODE }}
+      - name: Install, exercise, and uninstall packages
+        env:
+          PACKAGE_MODE: ${{ inputs.mode || 'all' }}
+        run: npm run test:packages -- ${{ env.PACKAGE_MODE }}
+      - name: Upload installers and checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: reqora-${{ runner.os }}-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          path: |
+            release/*.exe
+            release/*.tar.gz
+            release/SHA256SUMS-*.txt

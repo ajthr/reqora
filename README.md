@@ -8,7 +8,7 @@ A free, open-source REST client for building, testing, and debugging HTTP APIs. 
 
 ## Project status
 
-Reqora now has its first working REST workflow: a shared React and TypeScript workspace with a Node.js request engine, available through the browser and Electron. Docker runs the web UI and backend together. The project is early in development; the long-term feature list below is a roadmap, not a claim of feature parity. Desktop installers are not available yet.
+Reqora now has its first working REST workflow: a shared React and TypeScript workspace with a Node.js request engine, available through the browser and Electron. Docker runs the web UI and backend together. The project is early in development; the long-term feature list below is a roadmap, not a claim of feature parity. Installer build scripts now cover desktop-only, web-only, and combined installations for Windows, Linux, and macOS.
 
 ## Available now
 
@@ -106,6 +106,10 @@ The goal is comprehensive coverage of the REST workflows available in establishe
 - A consistent editing and testing experience across the web and desktop apps.
 - Access to local services and HTTP execution outside browser CORS restrictions, with additional transport controls planned.
 
+## Installation packages
+
+See [installation and release builds](docs/installation.md) for Windows setup wizards and Linux/macOS terminal installers. All three modes—desktop only, web UI only, or both—include their required runtimes. Build with `npm run package` or use the **Build installers** GitHub Actions workflow. Packages are generated into `release/`; no hosted release is published automatically.
+
 ## Development
 
 ### Run the web app with Docker
@@ -153,7 +157,7 @@ On Windows, macOS, or Linux with a graphical desktop, install dependencies as ab
 npm run desktop
 ```
 
-This builds the shared UI and Electron main process, then opens the REST workspace. Electron starts its own loopback request engine on port 43129 and does not require Docker or a separate backend. A stable local origin preserves desktop data across launches, and a second launch focuses the existing window. Native packaging and installers will be added later.
+This builds the shared UI and Electron main process, then opens the REST workspace. Electron starts its own loopback request engine on port 43129 and does not require Docker or a separate backend. A stable local origin preserves desktop data across launches, and a second launch focuses the existing window. Use `npm run package:desktop` to produce an installation package; see [installation instructions](docs/installation.md) for all modes.
 
 ### Check and build
 
@@ -184,6 +188,10 @@ electron/main.ts         Electron window and app lifecycle
 server/                  Node.js server and shared HTTP request engine
 shared/                  Shared request and response types
 scripts/dev.mjs          Web/backend development process launcher
+scripts/package.mjs      Native installation package builder
+packaging/               Windows wizard, Unix installers, web launcher, icons
+docs/installation.md     Installation, upgrades, and release build guide
+.github/workflows/       Native installer build automation
 tests/                   Request engine and workspace behavior tests
 docker/nginx.conf        Web container configuration
 Dockerfile               Web build and runtime image

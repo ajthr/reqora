@@ -1,0 +1,33 @@
+Reqora installation (Linux and macOS)
+
+Extract the archive, open a terminal in the extracted directory, then run:
+  ./install.sh
+
+The desktop and web archives install their respective component. The both archive
+asks you to choose Desktop, Web UI, or Both when run interactively.
+For an unattended installation:
+  ./install.sh --mode desktop
+  ./install.sh --mode web
+  ./install.sh --mode both
+
+Run as your normal user, without sudo. Installation defaults to
+~/.local/share/reqora, with launchers in ~/.local/bin. Custom absolute paths:
+  ./install.sh --mode web --prefix "$HOME/Apps/reqora" --bin-dir "$HOME/bin"
+
+Start desktop: ~/.local/bin/reqora
+Start web:     ~/.local/bin/reqora-web open
+Web URL:       http://127.0.0.1:5174
+Stop web:      ~/.local/bin/reqora-web stop
+Web status:    ~/.local/bin/reqora-web status
+Uninstall:     ~/.local/bin/reqora-uninstall
+
+Add ~/.local/bin to PATH for shorter commands. The web runtime is bundled; Node.js
+and Docker are not required. Web runs on demand, not automatically at login.
+Set REQORA_WEB_PORT before starting to use another port (1024-65535).
+Close the desktop app before upgrades, switching installation modes, or uninstall.
+Reinstall to the same location to replace components. Workspaces are preserved.
+
+Linux desktop requires a graphical session, Electron system libraries, and a host
+that permits Chromium sandboxing. Do not run it as root or disable its sandbox.
+macOS unsigned developer builds may require approval in System Settings > Privacy
+& Security. Distributed production builds should be signed and notarized.
