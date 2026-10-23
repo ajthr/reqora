@@ -3,12 +3,15 @@ import { after, before, test } from 'node:test';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import { gzipSync } from 'node:zlib';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createReqoraServer } from '../server/index.ts';
 import { executeRequest, MAX_RESPONSE_BYTES, RequestError, validateRequest } from '../server/execute.ts';
-import { initialWorkspace, newDraft, newEntry, prepareWorkspaceRequest } from '../src/lib/workspace.ts';
+import { MAX_API_BYTES, MAX_BODY_BYTES } from '../shared/body.ts';
+import { initialWorkspace, newDraft, newEntry, prepareWorkspaceRequest, workspaceToCurl } from '../src/lib/workspace.ts';
 
 async function listen(server: Server): Promise<string> {
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -36,6 +39,16 @@ const fixture = createServer(async (req, res) => {
   if (req.url === '/missing') { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('Not found'); return; }
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(Buffer.from(chunk));
+  if (req.url === '/inspect-body') {
+    const bytes = Buffer.concat(chunks);
+    const contentType = req.headers['content-type'] || '';
+    const parts = contentType.startsWith('multipart/form-data')
+      ? await Promise.all([...(await new Request('http://fixture/', { method: 'POST', headers: { 'Content-Type': contentType }, body: bytes }).formData())].map(async ([name, value]) => typeof value === 'string' ? { name, value } : { name, filename: value.name, type: value.type, data: Buffer.from(await value.arrayBuffer()).toString('base64') }))
+      : undefined;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ contentType, data: parts ? undefined : bytes.toString('base64'), parts }));
+    return;
+  }
   res.writeHead(200, { 'content-type': 'application/json', 'set-cookie': ['a=1; Path=/', 'b=2; Path=/'] });
   res.end(JSON.stringify({ method: req.method, url: req.url, headers: req.headers, body: Buffer.concat(chunks).toString() }));
 });
@@ -76,7 +89,10 @@ test('forwards methods, query, headers, body and separate response cookies', asy
   assert(response.durationMs >= 0);
 });
 test('returns HTTP errors as inspectable responses', async () => { const response = await executeRequest(request('/missing')); assert.equal(response.status, 404); assert.equal(response.body, 'Not found'); });
-test('supports HEAD without a response body', async () => { const response = await executeRequest({ ...request(), method: 'HEAD' }); assert.equal(response.body, ''); assert.equal(response.size, 0); });
+test('supports HEAD without a response body and ignores empty GET bodies', async () => {
+  const response = await executeRequest({ ...request(), method: 'HEAD' }); assert.equal(response.body, ''); assert.equal(response.size, 0);
+  assert.equal((await executeRequest({ ...request(), body: '' })).status, 200);
+});
 test('redirect setting controls whether redirects are followed', async () => {
   assert.equal((await executeRequest(request('/redirect'))).status, 200);
   assert.equal((await executeRequest({ ...request('/redirect'), followRedirects: false })).status, 302);
@@ -111,9 +127,77 @@ test('API accepts a request, reports health, and validates method/content/origin
   assert.equal((await fetch(apiUrl + '/api/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{broken' })).status, 400);
 });
 test('API rejects oversized requests with a JSON error', async () => {
-  const response = await fetch(apiUrl + '/api/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: 'x'.repeat(1024 * 1024) }) });
+  const response = await fetch(apiUrl + '/api/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: 'x'.repeat(MAX_API_BYTES) }) });
   assert.equal(response.status, 413);
-  assert.match((await response.json() as { error: string }).error, /1 MB/);
+  assert.match((await response.json() as { error: string }).error, /16 MB/);
+});
+
+test('binary bodies preserve arbitrary bytes, empty files, and explicit media types through the API', async () => {
+  for (const data of [Buffer.from([0, 255, 128, 13, 10, 0, 123, 125]), Buffer.alloc(0), Buffer.alloc(2 * 1024 * 1024, 255)]) {
+    const input = { ...request('/inspect-body'), method: 'PUT', timeoutMs: 10_000, headers: [{ name: 'Content-Type', value: 'application/x-reqora-test' }], body: { kind: 'binary', file: { name: 'payload.bin', type: 'application/octet-stream', data: data.toString('base64') } } };
+    const response = await fetch(apiUrl + '/api/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
+    assert.equal(response.status, 200);
+    const payload = await response.json() as { body: string };
+    const echo = JSON.parse(payload.body);
+    assert.equal(echo.data, data.toString('base64'));
+    assert.equal(echo.contentType, 'application/x-reqora-test');
+  }
+});
+
+test('multipart sends repeated text/file fields, Unicode filenames, empty values, and a generated boundary', async () => {
+  const bytes = Buffer.from([0, 255, 13, 10, 1]);
+  const response = await executeRequest({ ...request('/inspect-body'), method: 'POST', headers: [{ name: 'Content-Type', value: 'multipart/form-data; boundary=wrong' }], body: { kind: 'multipart', parts: [
+    { name: 'tags', value: '@literal;type=text/html' }, { name: 'tags', value: 'héllo\nworld' }, { name: 'blank', value: '' },
+    { name: 'files', file: { name: 'résumé "one".bin', type: 'application/octet-stream', data: bytes.toString('base64') } },
+    { name: 'files', file: { name: 'empty.txt', type: 'text/plain', data: '' } },
+  ] } });
+  const echo = JSON.parse(response.body);
+  assert.match(echo.contentType, /^multipart\/form-data; boundary=/);
+  assert(!echo.contentType.endsWith('wrong'));
+  assert.deepEqual(echo.parts, [
+    { name: 'tags', value: '@literal;type=text/html' }, { name: 'tags', value: 'héllo\r\nworld' }, { name: 'blank', value: '' },
+    { name: 'files', filename: 'résumé "one".bin', type: 'application/octet-stream', data: bytes.toString('base64') },
+    { name: 'files', filename: 'empty.txt', type: 'text/plain', data: '' },
+  ]);
+});
+
+test('body validation rejects malformed encodings, multipart injection, and combined/encoded body overflows', async () => {
+  const file = { name: 'test.bin', type: 'application/octet-stream', data: 'AA==' };
+  for (const body of [null, [], 42, { kind: 'unknown' }, { kind: 'binary', file: { ...file, data: 'A===' } },
+    { kind: 'binary', file: { ...file, data: 'AB==' } }, { kind: 'binary', file: { ...file, data: 'éé==' } },
+    { kind: 'binary', file: { ...file, name: '../secret' } }, { kind: 'binary', file: { ...file, type: 'text/plain\r\nX-Injected: yes' } },
+    { kind: 'multipart', parts: [{ name: 'x\r\nheader', value: 'x' }] }, { kind: 'multipart', parts: [{ name: '', value: 'x' }] },
+    { kind: 'multipart', parts: [{ name: 'field', value: 'x', file }] },
+    { kind: 'multipart', parts: Array.from({ length: 101 }, () => ({ name: 'x', value: '' })) },
+  ]) assert.throws(() => validateRequest({ ...request(), method: 'POST', body }), RequestError);
+  assert.throws(() => validateRequest({ ...request(), body: { kind: 'binary', file } }), /GET requests cannot contain a body/);
+  assert.throws(() => validateRequest({ ...request(), method: 'POST', body: 'x'.repeat(MAX_BODY_BYTES + 1) }), (error: unknown) => error instanceof RequestError && error.status === 413);
+  assert.throws(() => validateRequest({ ...request(), method: 'POST', body: { kind: 'multipart', parts: [{ name: 'a', value: 'x'.repeat(MAX_BODY_BYTES / 2) }, { name: 'b', value: 'x'.repeat(MAX_BODY_BYTES / 2) }] } }), /10 MB/);
+  await assert.rejects(executeRequest({ ...request(), method: 'POST', body: { kind: 'multipart', parts: [{ name: 'f', file: { ...file, data: Buffer.alloc(MAX_BODY_BYTES).toString('base64') } }] } }), /10 MB/);
+  const response = await fetch(apiUrl + '/api/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...request(), method: 'POST', body: 'x'.repeat(MAX_BODY_BYTES + 1) }) });
+  assert.equal(response.status, 413);
+  assert.match((await response.json() as { error: string }).error, /10 MB/);
+});
+
+test('generated cURL uploads real multipart and binary files with shell-safe filenames', { skip: process.platform === 'win32' }, async context => {
+  const exec = promisify(execFile);
+  try { await exec('curl', ['--version']); } catch { context.skip('curl is unavailable'); return; }
+  const directory = await mkdtemp(join(tmpdir(), 'reqora-curl-'));
+  try {
+    const name = 'résumé ";$payload,1.bin';
+    const bytes = Buffer.from([0, 255, 1, 128]);
+    await writeFile(join(directory, name), bytes);
+    const file = { id: 'attachment', name, size: bytes.length, type: 'application/octet-stream; profile="reqora;headers=@./missing"' };
+    const draft = { ...newDraft(), method: 'POST', url: fixtureUrl + '/inspect-body', bodyType: 'multipart' as const, multipartFields: [
+      { ...newEntry('text', '@literal;type=text/html'), kind: 'text' as const },
+      { ...newEntry('files'), kind: 'file' as const, file },
+    ] };
+    const workspace = initialWorkspace();
+    const echo = JSON.parse((await exec('/bin/sh', ['-c', workspaceToCurl(workspace, draft)], { cwd: directory })).stdout);
+    assert.deepEqual(echo.parts, [{ name: 'text', value: '@literal;type=text/html' }, { name: 'files', filename: name, type: file.type, data: bytes.toString('base64') }]);
+    const binary = JSON.parse((await exec('/bin/sh', ['-c', workspaceToCurl(workspace, { ...draft, bodyType: 'binary', binaryFile: file })], { cwd: directory })).stdout);
+    assert.equal(binary.data, bytes.toString('base64'));
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
 test('collection variables resolve before a request is forwarded through the API', async () => {

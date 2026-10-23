@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { closeRequestTab, getRequestCollection, getVariableScope, initialWorkspace, interpolate, newDraft, newEntry, parseWorkspace, prepareRequest, prepareWorkspaceRequest, toCurl } from '../src/lib/workspace.ts';
+import { closeRequestTab, getRequestCollection, getVariableScope, initialWorkspace, interpolate, newDraft, newEntry, parseWorkspace, prepareRequest, prepareWorkspaceRequest, requestFiles, toCurl, workspaceToCurl } from '../src/lib/workspace.ts';
 
 test('collection values override globals while disabled values fall back and empty strings still override', () => {
   const globals = [newEntry('base_url', 'https://global.example'), newEntry('token', 'global-token'), newEntry('empty', 'global')];
@@ -116,4 +116,65 @@ test('cURL export quotes shell content without interpolating it', () => {
   assert(result.includes("--data-raw 'it'\\''s $(private)'"));
   assert(result.includes('--max-time 1.5'));
   assert(!result.includes('--location'));
+});
+
+test('structured URL encoded forms resolve values before encoding and preserve repeats and empty fields', () => {
+  const draft = { ...newDraft(), method: 'POST', url: 'https://example.com', bodyType: 'form' as const,
+    formFields: [newEntry('tag', '{{value}}'), newEntry('tag', 'second'), newEntry('empty', ''), { ...newEntry('skip', '{{missing}}'), enabled: false }, newEntry('', 'ignored')] };
+  const prepared = prepareRequest(draft, [newEntry('value', 'global')], [newEntry('value', 'a&b=c + héllo')]);
+  assert.equal(prepared.body, 'tag=a%26b%3Dc+%2B+h%C3%A9llo&tag=second&empty=');
+  assert.equal(prepared.headers[0].value, 'application/x-www-form-urlencoded');
+});
+
+test('legacy raw forms migrate to editable rows and new file metadata survives workspace import/export', () => {
+  const workspace = initialWorkspace();
+  const legacy = { ...newDraft(), bodyType: 'form', body: 'tag=one&tag=two+words&empty=&key={{value}}' } as Record<string, unknown>;
+  delete legacy.formFields; delete legacy.multipartFields;
+  const migrated = parseWorkspace(JSON.stringify({ ...workspace, saved: [{ collectionId: workspace.collections[0].id, request: legacy }], history: [{ id: 'history', date: 'now', request: legacy }] }));
+  assert.deepEqual(migrated.saved[0].request.formFields.map(row => [row.name, row.value]), [['tag', 'one'], ['tag', 'two words'], ['empty', ''], ['key', '{{value}}']]);
+  assert.equal(migrated.history[0].request.formFields.length, 4);
+  const file = { id: 'file', name: 'file.bin', type: 'application/octet-stream', size: 3 };
+  migrated.saved[0].request = { ...newDraft(), bodyType: 'binary', binaryFile: file };
+  assert.deepEqual(parseWorkspace(JSON.stringify(migrated)), migrated);
+  for (const invalid of [{ ...file, size: -1 }, { ...file, size: 11 * 1024 * 1024 }, { ...file, name: '../secret' }, { ...file, type: 'text/plain\r\nInjected' }]) {
+    assert.throws(() => parseWorkspace(JSON.stringify({ ...migrated, saved: [{ ...migrated.saved[0], request: { ...migrated.saved[0].request, binaryFile: invalid } }] })));
+  }
+});
+
+test('multipart resolves text variables, omits disabled rows, and leaves file bytes untouched', () => {
+  const file = { id: 'file', name: 'payload.txt', type: 'text/plain', size: 11 };
+  const bytes = Buffer.from('{{literal}}').toString('base64');
+  const draft = { ...newDraft(), method: 'POST', url: 'https://example.com', bodyType: 'multipart' as const, headers: [newEntry('Content-Type', 'application/json')], multipartFields: [
+    { ...newEntry('{{key}}', '{{value}}'), kind: 'text' as const }, { ...newEntry('files'), kind: 'file' as const, file },
+    { ...newEntry('ignored', '{{missing}}'), kind: 'text' as const, enabled: false },
+  ] };
+  const prepared = prepareRequest(draft, [newEntry('key', 'field'), newEntry('value', 'global')], [newEntry('value', 'collection')], new Map([[file.id, bytes]]));
+  assert.deepEqual(prepared.body, { kind: 'multipart', parts: [{ name: 'field', value: 'collection' }, { name: 'files', file: { name: file.name, type: file.type, data: bytes } }] });
+  assert.equal(prepared.headers.length, 0);
+  assert.deepEqual(requestFiles(draft), [file]);
+  assert.throws(() => prepareRequest(draft, [newEntry('key', 'field'), newEntry('value', 'v')]), /Reattach/);
+  assert.equal(prepareRequest({ ...draft, method: 'GET' }, []).body, undefined);
+});
+
+test('binary and XML bodies use defaults, preserve overrides, and report missing attachments', () => {
+  const file = { id: 'binary', name: 'payload.bin', type: '', size: 0 };
+  const draft = { ...newDraft(), method: 'PATCH', url: 'https://example.com', bodyType: 'binary' as const, binaryFile: file };
+  assert.deepEqual(prepareRequest(draft, [], [], new Map([[file.id, '']])).body, { kind: 'binary', file: { name: 'payload.bin', type: 'application/octet-stream', data: '' } });
+  assert.throws(() => prepareRequest({ ...draft, binaryFile: undefined }, []), /Attach a file/);
+  assert.equal(prepareRequest({ ...draft, bodyType: 'xml', body: '<value>{{value}}</value>' }, [newEntry('value', 'text')]).body, '<value>text</value>');
+  assert.equal(prepareRequest({ ...draft, bodyType: 'xml', body: '<root/>' }, []).headers[0].value, 'application/xml');
+  assert.equal(prepareRequest({ ...draft, headers: [newEntry('Content-Type', 'image/png')] }, [], [], new Map([[file.id, '']])).headers[0].value, 'image/png');
+});
+
+test('file cURL commands reference quoted local filenames and never embed stored bytes', () => {
+  const workspace = initialWorkspace();
+  const file = { id: 'file', name: "it's \"data\".bin", type: 'application/octet-stream', size: 10 };
+  const draft = { ...newDraft(), method: 'POST', url: 'https://example.com', bodyType: 'multipart' as const,
+    multipartFields: [{ ...newEntry('text', '@literal'), kind: 'text' as const }, { ...newEntry('files'), kind: 'file' as const, file }] };
+  const curl = workspaceToCurl(workspace, draft);
+  assert.match(curl, /--form-string/);
+  assert.match(curl, /--form /);
+  assert(curl.includes('\\"data\\"'));
+  assert(!curl.includes('boundary='));
+  assert(workspaceToCurl(workspace, { ...draft, bodyType: 'binary', binaryFile: file }).includes('--data-binary'));
 });

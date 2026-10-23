@@ -195,6 +195,37 @@ code, kbd, pre { font-family: var(--mono); }
 .format-button { margin-left: auto; font-size: 12px; padding: 3px 6px; }
 .body-editor { width: 100%; min-height: 135px; height: calc(100% - 35px); resize: vertical; color: var(--text); font: 14px/1.8 var(--mono); padding: 10px 13px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); tab-size: 2; }
 .body-none { font-size: 13px; color: var(--muted); padding: 30px 0; text-align: center; }
+.request-editor.body-active { flex-basis: clamp(245px, 40vh, 400px); }
+.request-body-editor { min-height: 100%; padding-bottom: 12px; }
+.request-body-editor .body-options { flex-wrap: wrap; gap: 12px 18px; font-size: 14px; }
+.body-help, .body-file-note, .attachment-message, .body-error { font-size: 14px; line-height: 1.6; }
+.body-help { color: var(--secondary); margin: 0 0 12px; }
+.body-file-note { color: var(--muted); display: flex; align-items: flex-start; gap: 7px; margin: 12px 0 0; }
+.body-file-note > svg { flex-shrink: 0; margin-top: 4px; }
+.multipart-heading, .multipart-row { display: grid; grid-template-columns: 33px minmax(95px, 1fr) 85px minmax(180px, 2fr) 30px; align-items: center; }
+.multipart-heading { background: var(--surface); color: var(--muted); border: 1px solid var(--border); border-radius: 5px 5px 0 0; font-size: 12px; min-height: 32px; letter-spacing: .7px; }
+.multipart-heading > span { padding-left: 9px; }
+.multipart-row { border: 1px solid var(--border); border-top: 0; min-height: 42px; }
+.multipart-row > input, .multipart-row > select { min-width: 0; width: 100%; height: 40px; border: 0; border-right: 1px solid var(--border); background: var(--bg); color: var(--text); padding: 0 9px; font-size: 14px; }
+.multipart-row > input { font-family: var(--mono); }
+.multipart-row > .file-attachment { margin: 5px; min-width: 0; }
+.file-drop-zone { display: flex; align-items: center; gap: 10px; min-height: 72px; padding: 13px; border: 1px dashed var(--border); background: var(--surface); border-radius: 6px; transition: border-color .15s, background .15s; }
+.file-drop-zone > svg { flex-shrink: 0; color: var(--accent); }
+.file-drop-zone:focus-visible, .file-drop-zone.dragging { border-color: var(--accent); background: var(--accent-soft); outline: 2px solid var(--accent); outline-offset: 2px; }
+.file-drop-zone.missing-file { border-color: var(--muted); }
+.attachment-copy { min-width: 0; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+.attachment-copy strong { font-size: 14px; overflow-wrap: anywhere; font-weight: 550; }
+.attachment-copy span { font-size: 13px; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+.attachment-message { margin: 5px 0 0; color: var(--secondary); }
+.attachment-message.error-text { color: var(--red); }
+.multipart-row .file-drop-zone { min-height: 58px; padding: 8px; }
+.multipart-row .attachment-copy strong { font-size: 13px; }
+.multipart-row .attachment-copy span { font-size: 12px; }
+@media (max-width: 650px) {
+  .multipart-table { overflow-x: auto; padding-bottom: 4px; }
+  .multipart-heading, .multipart-row { min-width: 480px; }
+  .request-body-editor .body-options { gap: 10px 14px; }
+}
 .inline-empty { display: flex; align-items: center; justify-content: center; gap: 20px; height: 140px; color: var(--muted); }
 .inline-empty strong { font-size: 14px; color: var(--secondary); font-weight: 500; }
 .inline-empty p { font-size: 13px; line-height: 1.7; max-width: 340px; margin-bottom: 0; }

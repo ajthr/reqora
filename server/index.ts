@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { executeRequest, RequestError } from './execute.ts';
+import { MAX_API_BYTES } from '../shared/body.ts';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -38,7 +39,7 @@ export function createReqoraServer(options: { staticDirectory?: string } = {}) {
         let size = 0;
         for await (const chunk of request.iterator({ destroyOnReturn: false })) {
           size += chunk.length;
-          if (size > 1024 * 1024) { request.resume(); throw new RequestError('Request exceeds the 1 MB limit.', 413); }
+          if (size > MAX_API_BYTES) { request.resume(); throw new RequestError('Request payload exceeds the 16 MB transport limit (10 MB body plus file encoding).', 413); }
           chunks.push(Buffer.from(chunk));
         }
         let input: unknown;

@@ -16,7 +16,7 @@ Reqora now has its first working REST workflow: a shared React and TypeScript wo
 - A startup page when no request tabs are open, with quick actions and saved requests. Closing the last tab returns here without creating another request.
 - Shared File, View, Request, and Help menus and an interactive status bar in both web and Electron. Electron's native application menu is removed.
 - GET, POST, PUT, PATCH, DELETE, HEAD, and OPTIONS requests over HTTP and HTTPS.
-- Query parameters, request headers, JSON/text/URL-encoded bodies, and basic/bearer authentication.
+- Query parameters, request headers, JSON/XML/text bodies, structured URL-encoded forms, multipart text/file uploads, binary file bodies, and basic/bearer authentication.
 - Global environment and per-collection variables with `{{variable}}` substitution in URLs, parameters, headers, authentication, and bodies. Collection values take priority over globals, including in generated cURL.
 - Collection overview pages with descriptions, request lists, variable editors, and a resolved-value table showing the source of each effective variable.
 - A server-side request engine with cancellation, configurable timeouts, and optional redirect following.
@@ -40,7 +40,7 @@ Variable priority, from highest to lowest, is **collection → global environmen
 - Only enabled, non-empty variable names participate. An unchecked collection variable falls back to the global value.
 - An enabled empty string intentionally overrides the global value.
 - Names are trimmed and case-sensitive. If a name repeats in a scope, the last enabled row wins.
-- Values can reference other variables, for example global `base_url = https://{{host}}/v1` with a collection-specific `host` override. Resolution uses the final effective scope and reports missing references, cycles, excessive nesting, or expanded values over 1 MB.
+- Values can reference other variables, for example global `base_url = https://{{host}}/v1` with a collection-specific `host` override. Resolution uses the final effective scope and reports missing references, cycles, excessive nesting, or excessive expanded values (1 MB in URLs/headers and 10 MB in body values).
 - Workspace/request/collection exports preserve collection variables and descriptions. Duplicating a collection copies its variables independently. Older workspace files migrate with empty collection variables and descriptions.
 
 Close collection and request tabs to return to the startup page. Closing an overview preserves its automatically saved settings.
@@ -48,6 +48,21 @@ Close collection and request tabs to return to the startup page. Closing an over
 Collections, saved request credentials, history, and environment values are stored in local browser storage without encryption. Workspace exports include those values. Web and desktop maintain separate local workspaces; use export/import to move between them. Save requests you want to keep before closing their tabs.
 
 To import a workspace, open **Import**, drag a Reqora JSON export into the custom dialog or paste its contents, then review and confirm replacement. Request and collection exports use the same workspace format and include environment values so variable references remain usable. Imports replace the saved workspace after confirmation; they do not merge into it.
+
+### Request bodies
+
+Open a request's **Body** tab and select:
+
+- **JSON**, **XML**, or **Text** for raw content. JSON is validated after variable substitution and has a format action. XML and text are sent as written. Set a custom `Content-Type` in Headers if needed.
+- **URL encoded** for an editable key/value table. Only checked, named rows are sent; duplicate keys and empty values are preserved. Values are interpolated before encoding, so `&`, `+`, and Unicode stay inside their field values. Older raw URL-encoded bodies migrate into this table.
+- **Multipart** for mixed text/file fields. Choose Text or File per row; repeat a key for multiple files or values. The engine generates the multipart boundary and overrides any manually supplied `Content-Type` for this mode.
+- **Binary file** to send a file's exact bytes. The file's media type is the default `Content-Type`; Headers can override it. Empty files are supported.
+
+Attach files by dragging them into the in-app file area or focusing it and pasting a file when the clipboard provides file data. File areas support replacing/removing attachments without native file dialogs. A missing attachment is flagged and must be reattached before sending.
+
+Attachments are stored separately in IndexedDB on the current device, outside local-storage workspace JSON. If persistent file storage is unavailable, the UI reports that the attachment is available for the current session only. Saving, duplication, history replay, and same-device import/export retain file references. Exports include **file metadata, not file bytes**; reattach files when moving a workspace between browsers/devices or between web and desktop. Clear the application's site storage to remove stored attachments. Files are not encrypted by Reqora.
+
+Global/collection variables apply to raw content and form field names/text values. File bytes and filenames remain literal. GET and HEAD ignore configured bodies and attachments while retaining them for later method changes. The combined outbound body limit is **10 MB**, including multipart boundaries; the JSON transport limit is **16 MB**. cURL exports use local filenames (`--form` / `--data-binary`), so place the named files in the directory where you run the command.
 
 ## Platforms and technology
 
@@ -59,7 +74,7 @@ The initial scope is REST over HTTP and HTTPS. GraphQL, WebSocket, gRPC, and oth
 
 ## Planned REST capabilities
 
-The goal is comprehensive coverage of the REST workflows available in established clients. This outline includes both the initial features above and work still to come, such as OAuth, multipart uploads, cookie management, scripting, collection runners, and OpenAPI/third-party collection imports.
+The goal is comprehensive coverage of the REST workflows available in established clients. This outline includes both the initial features above and work still to come, such as OAuth, cookie management, scripting, collection runners, and OpenAPI/third-party collection imports.
 
 ### Compose and send requests
 
@@ -172,10 +187,10 @@ Web output is written to `dist/`; compiled Electron code and its shared backend 
 ### Backend API
 
 - `GET /api/health` returns the request engine's health.
-- `POST /api/execute` accepts JSON containing `url`, `method`, `headers` (an array of `{ name, value }`), optional text `body`, `timeoutMs`, and `followRedirects`.
+- `POST /api/execute` accepts JSON containing `url`, `method`, `headers` (an array of `{ name, value }`), optional `body` (text or a typed binary/multipart body), `timeoutMs`, and `followRedirects`.
 - Responses contain the upstream status, status text, final URL, headers, body, encoding (`utf8` or `base64`), duration, and byte size. Upstream 4xx/5xx responses remain inspectable; transport and validation errors use a JSON `error` field.
 
-The initial engine verifies TLS certificates, supports timeouts from 100 ms to 60 seconds, limits execution payloads to 1 MB, and limits decoded response bodies to 5 MB. Response previews show up to 100 KB / 2,000 lines; downloads include the full response within the engine limit. Request framing headers such as `Host` and `Content-Length` are managed by the engine. Cookie headers can be set manually, but a persistent cookie jar has not been implemented.
+The initial engine verifies TLS certificates, supports timeouts from 100 ms to 60 seconds, limits outbound request bodies to 10 MB and JSON execution payloads to 16 MB (to accommodate base64 file transport), and limits decoded response bodies to 5 MB. Response previews show up to 100 KB / 2,000 lines; downloads include the full response within the engine limit. Request framing headers such as `Host` and `Content-Length` are managed by the engine. Cookie headers can be set manually, but a persistent cookie jar has not been implemented.
 
 This is currently a local, single-user application. Accounts, cloud synchronization, encrypted credential storage, and multi-user hosting are outside this increment.
 
@@ -186,7 +201,7 @@ assets/                  Existing brand assets
 src/                     Shared React and TypeScript UI
 electron/main.ts         Electron window and app lifecycle
 server/                  Node.js server and shared HTTP request engine
-shared/                  Shared request and response types
+shared/                  Shared request/response types and body limits
 scripts/dev.mjs          Web/backend development process launcher
 scripts/package.mjs      Native installation package builder
 packaging/               Windows wizard, Unix installers, web launcher, icons

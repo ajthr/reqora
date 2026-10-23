@@ -3,11 +3,20 @@ export interface Header {
   value: string;
 }
 
+export interface UploadFile {
+  name: string;
+  type: string;
+  data: string; // Canonical base64; file bytes are never interpolated as variables.
+}
+
+export type MultipartPart = { name: string; value: string } | { name: string; file: UploadFile };
+export type RequestBody = string | { kind: 'binary'; file: UploadFile } | { kind: 'multipart'; parts: MultipartPart[] };
+
 export interface HttpRequest {
   url: string;
   method: string;
   headers: Header[];
-  body?: string;
+  body?: RequestBody;
   timeoutMs: number;
   followRedirects: boolean;
 }

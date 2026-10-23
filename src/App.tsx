@@ -4,6 +4,9 @@ import type { HttpResponse } from '../shared/types';
 import Icon from './components/Icon';
 import KeyValueEditor from './components/KeyValueEditor';
 import CodeView from './components/CodeView';
+import BodyEditor from './components/BodyEditor';
+import { readRequestFiles } from './lib/attachments';
+import { MAX_API_BYTES } from '../shared/body';
 import Modal, { ConfirmDialog } from './components/Dialog';
 import type { Confirmation } from './components/Dialog';
 import ActionMenu from './components/ActionMenu';
@@ -11,7 +14,7 @@ import type { MenuAction } from './components/ActionMenu';
 import Startup from './components/Startup';
 import CollectionOverview from './components/CollectionOverview';
 import type { CollectionSection } from './components/CollectionOverview';
-import { closeRequestTab, formatBody, formatSize, getRequestCollection, getVariableScope, initialWorkspace, newDraft, parseWorkspace, prepareWorkspaceRequest, toCurl } from './lib/workspace';
+import { closeRequestTab, formatBody, formatSize, getRequestCollection, getVariableScope, initialWorkspace, newDraft, parseWorkspace, prepareWorkspaceRequest, workspaceToCurl } from './lib/workspace';
 import type { Collection, Draft, Workspace } from './lib/workspace';
 import { brandingInteractionProps } from './lib/branding';
 
@@ -190,9 +193,6 @@ export default function App() {
   async function sendRequest() {
     if (!hasRequest || busyId || controller.current) return;
     const id = draft.id;
-    let request;
-    try { request = prepareWorkspaceRequest(workspace, draft); }
-    catch (error) { setResults(current => ({ ...current, [id]: { error: (error as Error).message } })); return; }
     const snapshot = { ...structuredClone(draft), ...(collection ? { collectionId: collection.id } : {}) };
     const abort = new AbortController();
     controller.current = abort;
@@ -200,9 +200,14 @@ export default function App() {
     setResults(current => ({ ...current, [id]: {} }));
     const history = { id: crypto.randomUUID(), date: new Date().toISOString(), request: snapshot };
     try {
-      const result = await fetch('/api/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request), signal: abort.signal });
+      const files = await readRequestFiles(snapshot, abort.signal);
+      const request = prepareWorkspaceRequest(workspace, snapshot, files);
+      const payloadBody = JSON.stringify(request);
+      if (new TextEncoder().encode(payloadBody).byteLength > MAX_API_BYTES) throw new Error('Request payload exceeds the 16 MB transport limit. Reduce the body or attached files.');
+      abort.signal.throwIfAborted();
+      const result = await fetch('/api/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payloadBody, signal: abort.signal });
       if (!result.headers.get('content-type')?.includes('application/json')) {
-        throw new Error(result.status === 413 ? 'Request exceeds the 1 MB limit.' : 'The request engine is unavailable. Start the backend and try again.');
+        throw new Error(result.status === 413 ? 'Request exceeds the 16 MB transport limit.' : 'The request engine is unavailable. Start the backend and try again.');
       }
       const payload = await result.json();
       if (!result.ok) throw new Error(payload.error || 'Unable to execute request.');
@@ -261,7 +266,7 @@ export default function App() {
 
   function duplicateRequest(request: Draft): Draft {
     const clone = structuredClone(request);
-    return { ...clone, collectionId: getRequestCollection(workspace, request)?.id, id: crypto.randomUUID(), params: clone.params.map(row => ({ ...row, id: crypto.randomUUID() })), headers: clone.headers.map(row => ({ ...row, id: crypto.randomUUID() })) };
+    return { ...clone, collectionId: getRequestCollection(workspace, request)?.id, id: crypto.randomUUID(), params: clone.params.map(row => ({ ...row, id: crypto.randomUUID() })), headers: clone.headers.map(row => ({ ...row, id: crypto.randomUUID() })), formFields: clone.formFields.map(row => ({ ...row, id: crypto.randomUUID() })), multipartFields: clone.multipartFields.map(row => ({ ...row, id: crypto.randomUUID() })) };
   }
 
   function exportSelection(collection: Collection, requestId?: string) {
@@ -289,7 +294,7 @@ export default function App() {
       } },
       { label: 'Export request', icon: 'download', separator: true, onSelect: () => exportSelection(collection, request.id) },
       { label: 'Copy as cURL', icon: 'code', onSelect: () => {
-        try { void copy(toCurl(prepareWorkspaceRequest(workspace, request)), 'cURL command copied.'); }
+        try { void copy(workspaceToCurl(workspace, request), 'cURL command copied.'); }
         catch (error) { setToast((error as Error).message); }
       } },
       { label: 'Delete request', icon: 'trash', danger: true, separator: true, onSelect: () => setConfirmation({
@@ -382,7 +387,7 @@ export default function App() {
   }
 
   let curl = '';
-  if (modal === 'curl') { try { curl = toCurl(prepareWorkspaceRequest(workspace, draft)); } catch (error) { curl = (error as Error).message; } }
+  if (modal === 'curl') { try { curl = workspaceToCurl(workspace, draft); } catch (error) { curl = (error as Error).message; } }
 
   return <div className={`app-shell ${sidebarHidden ? 'sidebar-hidden' : ''}`}>
     <aside className="activity-rail" aria-label="Workspace navigation">
@@ -446,11 +451,11 @@ export default function App() {
           {collection && <><button onClick={() => openCollection(collection.id, 'variables')} title="Edit collection variables">{collection.name}</button><Icon name="chevron" size={12} /></>}
           <button onClick={() => setModal('environment')}>Global environment</button><span>{effectiveVariables.length} effective variable{effectiveVariables.length === 1 ? '' : 's'}</span>
         </div>
-        <div className="request-editor"><nav className="editor-tabs" aria-label="Request configuration">{(['Params', 'Headers', 'Body', 'Auth', 'Settings'] as EditorTab[]).map(tab => <button key={tab} className={editorTab === tab ? 'active' : ''} onClick={() => setEditorTab(tab)}>{tab}{tab === 'Params' && count(draft.params) > 0 && <span className="tab-count">{count(draft.params)}</span>}{tab === 'Headers' && count(draft.headers) > 0 && <span className="tab-count">{count(draft.headers)}</span>}{tab === 'Auth' && draft.authType !== 'none' && <Icon name="lock" size={11} />}{tab === 'Body' && draft.bodyType !== 'none' && !['GET', 'HEAD'].includes(draft.method) && <span className="configured-dot" />}</button>)}<span className="editor-hint">Use <code>{'{{variables}}'}</code> anywhere</span></nav>
+        <div className={`request-editor ${editorTab === 'Body' ? 'body-active' : ''}`}><nav className="editor-tabs" aria-label="Request configuration">{(['Params', 'Headers', 'Body', 'Auth', 'Settings'] as EditorTab[]).map(tab => <button key={tab} className={editorTab === tab ? 'active' : ''} onClick={() => setEditorTab(tab)}>{tab}{tab === 'Params' && count(draft.params) > 0 && <span className="tab-count">{count(draft.params)}</span>}{tab === 'Headers' && count(draft.headers) > 0 && <span className="tab-count">{count(draft.headers)}</span>}{tab === 'Auth' && draft.authType !== 'none' && <Icon name="lock" size={11} />}{tab === 'Body' && draft.bodyType !== 'none' && !['GET', 'HEAD'].includes(draft.method) && <span className="configured-dot" />}</button>)}<span className="editor-hint">Use <code>{'{{variables}}'}</code> anywhere</span></nav>
           <div className="editor-content">
             {editorTab === 'Params' && <><div className="panel-label">Query parameters <span>Added to the URL when you send</span></div><KeyValueEditor rows={draft.params} onChange={params => updateDraft({ params })} /></>}
             {editorTab === 'Headers' && <><div className="panel-label">Request headers <span>Only checked rows are sent</span></div><KeyValueEditor rows={draft.headers} kind="header" onChange={headers => updateDraft({ headers })} /></>}
-            {editorTab === 'Body' && (['GET', 'HEAD'].includes(draft.method) ? <div className="inline-empty"><Icon name="file" size={24} /><div><strong>This request has no body</strong><p>{draft.method} requests send parameters in the URL. Choose POST, PUT, PATCH, or DELETE to send a body.</p></div></div> : <><div className="body-options">{(['none', 'json', 'text', 'form'] as const).map(type => <label key={type}><input type="radio" name="bodyType" checked={draft.bodyType === type} onChange={() => updateDraft({ bodyType: type })} />{{ none: 'None', json: 'JSON', text: 'Text', form: 'URL encoded' }[type]}</label>)}{draft.bodyType === 'json' && <button className="text-button format-button" onClick={() => { try { updateDraft({ body: JSON.stringify(JSON.parse(draft.body), null, 2) }); } catch { setToast('Enter valid JSON before formatting.'); } }}>Format JSON</button>}</div>{draft.bodyType === 'none' ? <div className="body-none">Choose a body type to include content with this request.</div> : <textarea className="body-editor" aria-label="Request body" spellCheck={false} placeholder={draft.bodyType === 'json' ? '{\n  "message": "Hello, world"\n}' : draft.bodyType === 'form' ? 'name=Reqora&hello=world' : 'Write your request body here...'} value={draft.body} onChange={event => updateDraft({ body: event.target.value })} />}</>)}
+            {editorTab === 'Body' && <BodyEditor key={draft.id} draft={draft} onChange={updateDraft} />}
             {editorTab === 'Auth' && <div className="auth-panel"><div className="auth-type"><label className="field-label" htmlFor="auth-type">Authorization type</label><select id="auth-type" className="field-input" value={draft.authType} onChange={event => updateDraft({ authType: event.target.value as Draft['authType'] })}><option value="none">No authentication</option><option value="bearer">Bearer token</option><option value="basic">Basic authentication</option></select><p>Authorization is added to the request headers automatically.</p></div><div className="auth-fields">{draft.authType === 'none' ? <div className="auth-empty"><Icon name="lock" size={25} /><p>This request does not use authentication.</p></div> : draft.authType === 'bearer' ? <label className="field-label">Token<input className="field-input" type="password" autoComplete="off" placeholder="Enter token or {{token}}" value={draft.token} onChange={event => updateDraft({ token: event.target.value })} /></label> : <><label className="field-label">Username<input className="field-input" autoComplete="off" value={draft.username} onChange={event => updateDraft({ username: event.target.value })} /></label><label className="field-label">Password<input className="field-input" type="password" autoComplete="off" value={draft.password} onChange={event => updateDraft({ password: event.target.value })} /></label></>}</div></div>}
             {editorTab === 'Settings' && <div className="settings-panel"><div><label className="field-label" htmlFor="timeout">Request timeout</label><p>Time to wait before cancelling the request.</p></div><label className="timeout-input"><input id="timeout" type="number" min="0.1" max="60" step="0.1" value={draft.timeoutMs / 1000} onChange={event => updateDraft({ timeoutMs: Number(event.target.value) * 1000 })} /><span>seconds</span></label><div><strong>Follow redirects</strong><p>Automatically follow HTTP redirect responses.</p></div><input className="toggle-check" aria-label="Follow redirects" type="checkbox" checked={draft.followRedirects} onChange={event => updateDraft({ followRedirects: event.target.checked })} /></div>}
           </div>
@@ -495,7 +500,7 @@ export default function App() {
       <div className="modal-footer"><button className="button button-primary" onClick={() => setModal(null)}>Done</button></div>
     </Modal>}
     {modal === 'curl' && <Modal title="Generate code" wide onClose={() => setModal(null)}>
-      <p className="modal-description">Run this cURL command in a POSIX shell. Environment variables are resolved to their current values.</p>
+      <p className="modal-description">Run this cURL command in a POSIX shell. Environment variables are resolved. For file bodies, place the named files in your current directory; file bytes are not embedded.</p>
       <div className="code-language"><Icon name="terminal" size={15} /> cURL · Shell</div><pre className="curl-preview">{curl}</pre>
       <div className="modal-footer"><button className="button button-secondary" onClick={() => setModal(null)}>Close</button><button className="button button-primary" onClick={() => void copy(curl, 'cURL command copied.')}><Icon name="copy" size={15} />{toast === 'cURL command copied.' ? 'Copied!' : 'Copy command'}</button></div>
     </Modal>}
@@ -541,7 +546,7 @@ export default function App() {
     {modal === 'engine' && <Modal title="Request engine" onClose={() => setModal(null)}>
       <div className="engine-health"><span className={`status-dot ${backend === 'online' ? '' : 'offline'}`} /><strong>{backend === 'online' ? 'Connected and ready' : backend === 'checking' ? 'Checking connection…' : 'Engine is unavailable'}</strong></div>
       <p className="modal-description">Your requests are sent by the local Node.js engine, shared by the web and desktop apps.</p>
-      <dl className="engine-details"><div><dt>Protocols</dt><dd>HTTP and HTTPS</dd></div><div><dt>Request limit</dt><dd>1 MB</dd></div><div><dt>Response limit</dt><dd>5 MB</dd></div><div><dt>Timeout range</dt><dd>0.1–60 seconds</dd></div><div><dt>TLS certificates</dt><dd>Verified</dd></div></dl>
+      <dl className="engine-details"><div><dt>Protocols</dt><dd>HTTP and HTTPS</dd></div><div><dt>Request body limit</dt><dd>10 MB (16 MB transport)</dd></div><div><dt>Response limit</dt><dd>5 MB</dd></div><div><dt>Timeout range</dt><dd>0.1–60 seconds</dd></div><div><dt>TLS certificates</dt><dd>Verified</dd></div></dl>
       <div className="modal-footer"><button className="button button-secondary" disabled={backend === 'checking'} onClick={() => void checkBackend()}>Check connection</button><button className="button button-primary" onClick={() => setModal(null)}>Done</button></div>
     </Modal>}
     {modal === 'about' && <Modal title="About Reqora" onClose={() => setModal(null)}>
