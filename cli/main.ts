@@ -1,7 +1,7 @@
 import { applyAuthenticationUpdates } from '../shared/auth.ts';
 import { readFile, writeFile, stat, realpath } from 'node:fs/promises';
 import { resolve, join, sep, relative, isAbsolute } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { publicRunReport, applyVariableChanges } from '../shared/automation.ts';
 import type { CheckResult, DataRow, RunReport } from '../shared/automation.ts';
 import { parseRunData } from '../shared/data.ts';
@@ -119,5 +119,8 @@ export async function main(args: string[]): Promise<number> {
 
 // ESM resolves directory aliases (including macOS /var -> /private/var).
 // Compare canonical paths so the installed CLI still recognizes direct execution.
-const entryPoint = process.argv[1] ? await realpath(resolve(process.argv[1])).catch(() => undefined) : undefined;
-if (entryPoint && import.meta.url === pathToFileURL(entryPoint).href) process.exitCode = await main(process.argv.slice(2));
+const [entryPoint, modulePath] = await Promise.all([
+  process.argv[1] ? realpath(resolve(process.argv[1])).catch(() => undefined) : undefined,
+  realpath(fileURLToPath(import.meta.url)).catch(() => undefined),
+]);
+if (entryPoint && modulePath && entryPoint === modulePath) process.exitCode = await main(process.argv.slice(2));

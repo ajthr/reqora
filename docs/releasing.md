@@ -19,6 +19,8 @@ The prepared version is `0.1.0-beta.1`. Commit these release files and push that
 
 The tag and public release are intentionally created by the workflow **after the next commit is pushed**, rather than in advance against the current checkout.
 
+After a successful publication, the **Publish Reqora download page** workflow deploys `website/index.html` to [Reqora's GitHub Pages site](https://ajthr.github.io/reqora/). The page links directly to the release's platform, architecture, and installation-mode assets. GitHub Pages must be enabled with the Actions source for its first deployment.
+
 The workflow uses the repository's built-in `GITHUB_TOKEN`. Only its final publish job has `contents: write`. No personal access token or signing secret is required for the unsigned beta. Repository/organization policies and tag rules must allow that token to create tags and releases. The repository must allow the official checkout/setup-node/artifact actions and GitHub-hosted runners.
 
 ## Future releases

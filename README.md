@@ -2,6 +2,8 @@
   <img src="assets/reqora-full.png" alt="Reqora logo" width="280" />
 </p>
 
+<p align="center"><a href="https://ajthr.github.io/reqora/">Download Reqora</a> · <a href="https://github.com/ajthr/reqora/releases">Release notes</a></p>
+
 # Reqora
 
 A free, open-source REST client for building, testing, and debugging HTTP APIs. Reqora aims to offer the REST workflows familiar to Postman and Insomnia through a web application and a cross-platform desktop application.

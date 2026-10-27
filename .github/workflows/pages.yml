@@ -1,0 +1,55 @@
+name: Publish Reqora download page
+
+on:
+  workflow_run:
+    workflows: [Release from main]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reqora-pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Confirm the version has a published release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_OUTPUT: ${{ github.output }}
+        shell: bash
+        run: |
+          version="v$(node -p "require('./package.json').version")"
+          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${version}" --jq 'select(.draft == false) | .html_url')"
+          test -n "$release"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/configure-pages@v5
+      - name: Assemble static download page
+        run: |
+          mkdir -p _site/assets
+          cp website/index.html _site/index.html
+          cp assets/logo-full.png _site/assets/logo-full.png
+          touch _site/.nojekyll
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+      - name: Publish landing page
+        id: deployment
+        uses: actions/deploy-pages@v4
