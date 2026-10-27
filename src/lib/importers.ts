@@ -5,7 +5,7 @@ type Obj = Record<string, any>;
 const object = (value: unknown): Obj => value && typeof value === 'object' && !Array.isArray(value) ? value as Obj : {};
 const string = (value: unknown): string => typeof value === 'string' ? value : '';
 const rows = (value: unknown): Obj[] => Array.isArray(value) ? value.map(object) : [];
-const entries = (value: unknown, key = 'key'): Entry[] => rows(value).filter(row => string(row[key])).map(row => ({ ...newEntry(string(row[key]), String(row.value ?? '')), enabled: row.disabled !== true }));
+const entries = (value: unknown, key = 'key'): Entry[] => rows(value).filter(row => string(row[key])).map(row => ({ ...newEntry(string(row[key]), String(row.value ?? '')), enabled: row.disabled !== true && row.enabled !== false }));
 const collection = (name: string, description = ''): Collection => ({ id: crypto.randomUUID(), name: name || 'Imported collection', description, variables: [] });
 const blank = (): Workspace => ({ ...initialWorkspace(), collections: [], saved: [], variables: [], history: [], cookies: [] });
 const validate = (workspace: Workspace): Workspace => parseWorkspace(JSON.stringify(workspace));

@@ -5,7 +5,9 @@ import KeyValueEditor from './components/KeyValueEditor';
 import ResponseInspector from './components/ResponseInspector';
 import type { ResponseView } from './components/ResponseInspector';
 import { responseCookies } from './components/ResponseInspector';
-import { importWorkspace } from './lib/importers';
+import TransferImportDialog from './components/TransferImportDialog';
+import { appendWorkspaces, applyTransfer, exportEnvironments, exportWorkspace as serializeWorkspace, exportWorkspaceBundle, uniqueName } from './lib/workspace-transfer';
+import type { ImportOptions, TransferPreview } from './lib/workspace-transfer';
 import { moveCollectionBefore, moveFolderBefore, moveSaved, orderedSaved, shiftCollection, shiftFolder, shiftSaved } from '../shared/organization';
 import BodyEditor from './components/BodyEditor';
 import { readRequestFiles } from './lib/attachments';
@@ -33,7 +35,7 @@ import CollectionOverview from './components/CollectionOverview';
 import type { CollectionSection } from './components/CollectionOverview';
 import { closeRequestTab, formatSize, getRequestCollection, getVariableScope, newDraft } from './lib/workspace';
 import type { Collection, Draft, ResponseExample, SavedRequest, Workspace } from './lib/workspace';
-import { emptyWorkspace, loadWorkspaceStore, STORE_KEY } from './lib/workspace-store';
+import { emptyWorkspace, LEGACY_KEY, loadWorkspaceStore, STORE_KEY } from './lib/workspace-store';
 import type { WorkspaceRecord } from './lib/workspace-store';
 import { activeEnvironment, workspaceGlobals } from './lib/workspace';
 import { brandingInteractionProps } from './lib/branding';
@@ -52,7 +54,12 @@ function download(name: string, content: BlobPart, type: string) {
 }
 
 export default function App() {
-  const [workspaceStore, setWorkspaceStore] = useState(() => loadWorkspaceStore(localStorage));
+  const [initialStore] = useState(() => {
+    try { return { store: loadWorkspaceStore(localStorage), snapshot: localStorage.getItem(STORE_KEY), error: false }; }
+    catch { return { store: loadWorkspaceStore({ getItem: () => null }), snapshot: null, error: true }; }
+  });
+  const [workspaceStore, setWorkspaceStore] = useState(initialStore.store);
+  const storageSnapshot = useRef(initialStore.snapshot);
   const workspace = workspaceStore.workspaces.find(item => item.id === workspaceStore.activeId)!.data;
   const workspaceName = workspaceStore.workspaces.find(item => item.id === workspaceStore.activeId)!.name;
   function setWorkspace(update: Workspace | ((current: Workspace) => Workspace)) {
@@ -69,7 +76,7 @@ export default function App() {
   const [responseTab, setResponseTab] = useState<ResponseView>('Body');
   const [pretty, setPretty] = useState(true);
   const [responseSearch, setResponseSearch] = useState('');
-  const [importFormat, setImportFormat] = useState('Reqora');
+  const [importScope, setImportScope] = useState<'all' | 'environments'>('all');
   const [results, setResults] = useState<Record<string, Result>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [sidebarTab, setSidebarTab] = useState<'collections' | 'history'>('collections');
@@ -77,11 +84,8 @@ export default function App() {
   const [collapsed, setCollapsed] = useState<string[]>([]);
   const [modal, setModal] = useState<'workspaces' | 'folder' | 'organize' | 'example' | 'save' | 'collection' | 'environment' | 'cookies' | 'curl' | 'import' | 'rename' | 'move' | 'shortcuts' | 'about' | 'engine' | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
-  const [importText, setImportText] = useState('');
   const [runnerCollectionId, setRunnerCollectionId] = useState<string | null>(null);
-  const [pendingImport, setPendingImport] = useState<Workspace | null>(null);
   const [dialogError, setDialogError] = useState('');
-  const [draggingImport, setDraggingImport] = useState(false);
   const [actionTarget, setActionTarget] = useState<{ kind: 'request' | 'collection'; id: string } | null>(null);
   const [actionName, setActionName] = useState('');
   const [moveCollectionId, setMoveCollectionId] = useState('');
@@ -97,7 +101,7 @@ export default function App() {
   const [workspaceDraftName, setWorkspaceDraftName] = useState('');
   const [environmentDraftName, setEnvironmentDraftName] = useState('');
   const [toast, setToast] = useState('');
-  const [storageError, setStorageError] = useState(false);
+  const [storageError, setStorageError] = useState(initialStore.error);
   const [backend, setBackend] = useState<'checking' | 'online' | 'offline'>('checking');
   const [mobileSidebar, setMobileSidebar] = useState(false);
   const [sidebarHidden, setSidebarHidden] = useState(false);
@@ -118,9 +122,16 @@ export default function App() {
   const count = (rows: Draft['params']) => rows.filter(row => row.enabled && row.name.trim()).length;
 
   useEffect(() => {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(workspaceStore)); setStorageError(false); }
+    if (initialStore.error) return;
+    try {
+      if (localStorage.getItem(STORE_KEY) !== storageSnapshot.current) throw new Error('Workspace storage changed in another window.');
+      const text = JSON.stringify(workspaceStore);
+      localStorage.setItem(STORE_KEY, text); storageSnapshot.current = text;
+      localStorage.removeItem(LEGACY_KEY);
+      setStorageError(false);
+    }
     catch { setStorageError(true); }
-  }, [workspaceStore]);
+  }, [workspaceStore, initialStore.error]);
   useEffect(() => {
     const valid = new Set(workspace.collections.map(item => item.id));
     setCollectionTabs(current => current.every(id => valid.has(id)) ? current : current.filter(id => valid.has(id)));
@@ -257,26 +268,6 @@ export default function App() {
     catch { setToast('Clipboard access is unavailable. Select the text and copy it manually.'); }
   }
 
-  function reviewImport(text: string) {
-    try {
-      if (new TextEncoder().encode(text).length > 5 * 1024 * 1024) throw new Error('Imports must be smaller than 5 MB.');
-      if (!text.trim()) throw new Error('Drop a workspace file or paste its JSON to continue.');
-      const imported = importWorkspace(text, workspace);
-      setPendingImport(imported.workspace);
-      setImportFormat(imported.format);
-      setDialogError('');
-    } catch (error) { setDialogError(error instanceof SyntaxError ? 'This JSON is invalid. Paste a supported JSON export or cURL command.' : error instanceof Error ? error.message : 'Unable to import this workspace.'); }
-  }
-
-  async function readImportFile(file: File) {
-    try {
-      if (file.size > 5 * 1024 * 1024) throw new Error('Imports must be smaller than 5 MB.');
-      const text = await file.text();
-      setImportText(text);
-      reviewImport(text);
-    } catch (error) { setDialogError(error instanceof Error ? error.message : 'Unable to read this file.'); }
-  }
-
   function renameItem(kind: 'request' | 'collection', id: string, name: string) {
     setActionTarget({ kind, id });
     setActionName(name);
@@ -403,57 +394,124 @@ export default function App() {
   }
 
   function openImport() {
-    setImportText(''); setPendingImport(null); setModal('import'); setMobileSidebar(false);
+    setImportScope('all'); setModal('import'); setMobileSidebar(false);
+  }
+
+  function resetWorkspaceView() {
+    setTabs([]); setActiveId(''); setCollectionTabs([]); setActiveCollectionId(null); setResults({});
+    setSearch(''); setCollapsed([]); setCollapsedFolders([]); setResponseSearch('');
+    setEditorTab('Params'); setResponseTab('Body'); setCollectionId(''); setCollectionSection('overview');
+    setWorkspaceDraftName(''); setEnvironmentDraftName(''); setModal(null); setMobileSidebar(false);
+  }
+
+  function leaveWorkspace(title: string, action: () => void) {
+    if (busyId || controller.current || runnerCollectionId) { setToast('Finish or cancel the current run before changing workspaces.'); return; }
+    const unsaved = tabs.some(tab => {
+      const original = workspace.saved.find(item => item.request.id === tab.id)?.request;
+      return !original || JSON.stringify(original) !== JSON.stringify(tab);
+    });
+    setModal(null);
+    if (unsaved) setConfirmation({ title, description: 'Unsaved request tab changes will be discarded. Save requests first if you want to keep them.', confirmLabel: 'Discard and continue', onConfirm: action });
+    else action();
   }
 
   function changeWorkspace(id: string) {
     if (id === workspaceStore.activeId) { setModal(null); return; }
-    if (busyId || runnerCollectionId) { setToast('Finish or cancel the current run before switching workspaces.'); return; }
-    const switchNow = () => {
-      setWorkspaceStore(current => ({ ...current, activeId: id }));
-      setTabs([]); setActiveId(''); setCollectionTabs([]); setActiveCollectionId(null); setResults({});
-      setModal(null); setMobileSidebar(false);
-    };
-    const unsaved = tabs.some(tab => {
-      const original = workspace.saved.find(item => item.request.id === tab.id)?.request;
-      return (!original || JSON.stringify(original) !== JSON.stringify(tab)) && (tab.url || tab.body || tab.name !== 'Untitled request' || tab.headers.length || tab.params.length);
+    if (!workspaceStore.workspaces.some(item => item.id === id)) return;
+    leaveWorkspace('Switch workspace?', () => {
+      setWorkspaceStore(current => ({ ...current, activeId: id })); resetWorkspaceView();
     });
-    if (unsaved) setConfirmation({ title: 'Switch workspace?', description: 'Unsaved request tab changes will be discarded. Saved requests stay in this workspace.', confirmLabel: 'Discard and switch', onConfirm: switchNow });
-    else switchNow();
   }
 
   function createWorkspace() {
     const name = workspaceDraftName.trim();
     if (workspaceStore.workspaces.length >= 100) { setDialogError('You can keep up to 100 local workspaces.'); return; }
     if (!name) { setDialogError('Enter a workspace name.'); return; }
-    const item: WorkspaceRecord = { id: crypto.randomUUID(), name, data: emptyWorkspace() };
+    const item: WorkspaceRecord = { id: crypto.randomUUID(), name: uniqueName(name, workspaceStore.workspaces.map(item => item.name)), data: emptyWorkspace() };
     const createNow = () => {
       setWorkspaceStore(current => ({ ...current, workspaces: [...current.workspaces, item], activeId: item.id }));
-      setTabs([]); setActiveId(''); setCollectionTabs([]); setActiveCollectionId(null); setResults({});
-      setWorkspaceDraftName(''); setModal(null);
+      resetWorkspaceView();
     };
-    const unsaved = tabs.some(tab => {
-      const original = workspace.saved.find(saved => saved.request.id === tab.id)?.request;
-      return (!original || JSON.stringify(original) !== JSON.stringify(tab)) && (tab.url || tab.body || tab.name !== 'Untitled request' || tab.headers.length || tab.params.length);
-    });
-    if (unsaved) setConfirmation({ title: 'Create workspace?', description: 'Unsaved request tab changes will be discarded.', confirmLabel: 'Discard and create', onConfirm: createNow });
-    else createNow();
+    leaveWorkspace('Create workspace?', createNow);
+  }
+
+  function duplicateWorkspace(id: string) {
+    const source = workspaceStore.workspaces.find(item => item.id === id);
+    if (!source) return;
+    try {
+      const next = appendWorkspaces(workspaceStore, [{ ...source, name: `${source.name} copy` }], id);
+      leaveWorkspace('Duplicate workspace?', () => { setWorkspaceStore(next); resetWorkspaceView(); setToast('Workspace duplicated.'); });
+    } catch (error) { setDialogError((error as Error).message); }
+  }
+
+  function applyImport(preview: TransferPreview, options: ImportOptions): string | void {
+    if (busyId || controller.current || runnerCollectionId) return 'Finish or cancel the current run before importing.';
+    try {
+      const next = applyTransfer(workspaceStore, preview, options);
+      const commit = () => {
+        setWorkspaceStore(next);
+        if (preview.kind !== 'environments') resetWorkspaceView();
+        else setModal(null);
+        setToast(preview.kind === 'environments' ? 'Environments imported.' : 'Workspaces imported.');
+      };
+      if (preview.kind !== 'environments') leaveWorkspace(options.destination === 'replace' ? 'Replace active workspace?' : 'Open imported workspace?', commit);
+      else commit();
+    } catch (error) { return (error as Error).message; }
   }
 
   function deleteWorkspace(id: string) {
-    if (workspaceStore.workspaces.length < 2) return;
+    if (workspaceStore.workspaces.length < 2 || busyId || controller.current || runnerCollectionId) return;
     const item = workspaceStore.workspaces.find(item => item.id === id);
     if (!item) return;
-    setConfirmation({ title: 'Delete workspace?', description: `“${item.name}” and all its saved collections, variables, history, cookies, and unsaved open tabs will be removed. Export it first if you need a backup.`, confirmLabel: 'Delete workspace', onConfirm: () => {
-      if (id === workspaceStore.activeId) { setTabs([]); setActiveId(''); setCollectionTabs([]); setActiveCollectionId(null); setResults({}); }
+    setModal(null);
+    setConfirmation({ title: 'Delete workspace?', description: `“${item.name}” and all its saved collections, environments, variables, history, and cookies will be removed.${id === workspaceStore.activeId ? ' Unsaved open tabs will also be discarded.' : ''} Export it first if you need a backup.`, confirmLabel: 'Delete workspace', onConfirm: () => {
+      if (id === workspaceStore.activeId) resetWorkspaceView();
       setWorkspaceStore(current => { const workspaces = current.workspaces.filter(record => record.id !== id); return { ...current, workspaces, activeId: current.activeId === id ? workspaces[0].id : current.activeId }; });
       setModal(null);
     } });
   }
 
   function exportWorkspace() {
-    download('reqora-workspace.json', JSON.stringify(workspace, null, 2), 'application/json');
+    const record = workspaceStore.workspaces.find(item => item.id === workspaceStore.activeId)!;
+    exportWorkspaceRecord(record);
+  }
+
+  function exportWorkspaceRecord(record: WorkspaceRecord) {
+    download(`reqora-${record.name.replace(/[^\p{L}\p{N}_-]+/gu, '-').slice(0, 60) || 'workspace'}.json`, serializeWorkspace(record), 'application/json');
     setToast('Workspace exported. Keep it private if it contains credentials.');
+  }
+
+  function exportAllWorkspaces() {
+    download('reqora-all-workspaces.json', exportWorkspaceBundle(workspaceStore), 'application/json');
+    setToast('All workspaces exported. Keep the backup private if it contains credentials.');
+  }
+
+  function exportEnvironmentSelection(id?: string) {
+    download(id ? 'reqora-environment.json' : 'reqora-environments.json', exportEnvironments(workspace, id), 'application/json');
+    setToast('Environments exported. Keep the file private if it contains credentials.');
+  }
+
+  function duplicateEnvironment() {
+    if (busyId || controller.current || runnerCollectionId) return;
+    const source = activeEnvironment(workspace);
+    if (!source) return;
+    const id = crypto.randomUUID();
+    setWorkspace(current => ({ ...current, activeEnvironmentId: id, environments: [...(current.environments || []), {
+      id, name: uniqueName(`${source.name} copy`, (current.environments || []).map(item => item.name)),
+      variables: source.variables.map(row => ({ ...row, id: crypto.randomUUID() })),
+    }] }));
+    setEnvironmentDraftName('');
+  }
+
+  function deleteEnvironment() {
+    if (busyId || controller.current || runnerCollectionId) return;
+    const target = activeEnvironment(workspace);
+    if (!target) return;
+    setModal(null);
+    setConfirmation({ title: 'Delete environment?', description: `“${target.name}” and its variable overrides will be deleted. Base variables and other environments are kept.`, confirmLabel: 'Delete environment', onConfirm: () => {
+      setWorkspace(current => ({ ...current, environments: current.environments?.filter(item => item.id !== target.id), activeEnvironmentId: undefined }));
+      setEnvironmentDraftName(''); setModal('environment');
+    } });
   }
 
   function closeAllTabs(discard = false) {
@@ -474,8 +532,11 @@ export default function App() {
       { label: 'New request', icon: 'plus', onSelect: addRequest },
       { label: 'Manage workspaces', icon: 'layers', onSelect: () => setModal('workspaces') },
       { label: 'New collection', icon: 'folder', onSelect: () => { setCollectionName(''); setModal('collection'); } },
-      { label: 'Import workspace', icon: 'upload', onSelect: openImport, separator: true },
+      { label: 'Manage workspaces', icon: 'layers', onSelect: () => setModal('workspaces'), separator: true },
+      { label: 'Manage environments', icon: 'globe', onSelect: () => setModal('environment') },
+      { label: 'Import workspaces or environments', icon: 'upload', onSelect: openImport, separator: true },
       { label: 'Export workspace', icon: 'download', onSelect: exportWorkspace },
+      { label: 'Export all workspaces', icon: 'download', onSelect: exportAllWorkspaces },
       { label: 'Save request', icon: 'save', onSelect: saveRequest, disabled: !hasRequest, separator: true, shortcut: 'Ctrl/⌘ S' },
       { label: 'Close tab', icon: 'close', onSelect: () => activeOverview ? closeCollectionTab(activeOverview.id) : closeTab(draft.id), disabled: !hasOpenTabs || !!busyId },
       { label: 'Close all tabs', icon: 'close', onSelect: () => closeAllTabs(), disabled: !hasOpenTabs || !!busyId },
@@ -569,6 +630,7 @@ export default function App() {
     </aside>
 
     <main className="main-workspace">
+      {storageError && <div className="workspace-storage-warning" role="alert">{initialStore.error ? 'Saved workspaces could not be read. Existing storage has been kept untouched. Export work from this session before closing.' : 'Workspace changes could not be saved, or another window changed the saved data. Export your work before reloading.'}</div>}
       <header className="topbar app-topbar">
         <button className="icon-button mobile-menu" aria-label="Open sidebar" onClick={() => { setSidebarHidden(false); setMobileSidebar(true); }}><Icon name="menu" /></button>
         <nav className="app-menu-bar" aria-label="Application menu" data-app-menu-bar>{applicationMenus.map(menu => <ActionMenu key={menu.label} label={`${menu.label} menu`} triggerLabel={menu.label} actions={menu.actions} />)}</nav>
@@ -623,10 +685,15 @@ export default function App() {
     {runnerCollectionId && <CollectionRunner workspace={workspace} collectionId={runnerCollectionId} onClose={() => setRunnerCollectionId(null)} onWorkspaceChange={setWorkspace} onAuthenticationUpdate={updates => { setWorkspace(current => applyAuthenticationUpdates(current, updates)); updateTabAuthentication(updates); }} onCookieUpdate={cookies => setWorkspace(current => ({ ...current, cookies }))} />}
     {toast && <div className="toast" role="status"><Icon name="check" size={17} /><span>{toast}</span><button className="icon-button" aria-label="Dismiss notification" onClick={() => setToast('')}><Icon name="close" size={14} /></button></div>}
     {modal === 'workspaces' && <Modal title="Workspaces" wide onClose={() => setModal(null)}>
-      <p className="modal-description">Each workspace has its own collections, environments, history, and cookies. Request tabs close when you switch.</p>
-      <div className="workspace-list">{workspaceStore.workspaces.map(item => <div className="workspace-list-row" key={item.id}><button className={item.id === workspaceStore.activeId ? 'button button-primary' : 'button button-secondary'} onClick={() => changeWorkspace(item.id)}>{item.name}{item.id === workspaceStore.activeId ? ' · Active' : ''}</button><span>{item.data.collections.length} collections</span><button className="text-button" disabled={workspaceStore.workspaces.length < 2 || !!busyId || !!runnerCollectionId} onClick={() => deleteWorkspace(item.id)}>Delete</button></div>)}</div>
-      <label className="field-label">Rename active workspace<input className="field-input" value={workspaceDraftName} placeholder={workspaceName} onChange={event => setWorkspaceDraftName(event.target.value)} /></label>
-      <div className="modal-footer"><button className="button button-secondary" disabled={!workspaceDraftName.trim()} onClick={() => { setWorkspaceStore(current => ({ ...current, workspaces: current.workspaces.map(item => item.id === current.activeId ? { ...item, name: workspaceDraftName.trim() } : item) })); setWorkspaceDraftName(''); }}>Rename active</button><button className="button button-primary" disabled={!workspaceDraftName.trim() || workspaceStore.workspaces.length >= 100 || !!busyId || !!runnerCollectionId} onClick={createWorkspace}>Create new workspace</button></div>
+      <p className="modal-description">Each workspace has its own collections, environments, history, and cookies. Save request changes before switching. Exports include saved credentials and file metadata.</p>
+      <div className="workspace-list">{workspaceStore.workspaces.map(item => <div className="workspace-list-row" key={item.id}>
+        <button className={item.id === workspaceStore.activeId ? 'button button-primary' : 'button button-secondary'} disabled={!!busyId || !!runnerCollectionId} onClick={() => changeWorkspace(item.id)}>{item.name}{item.id === workspaceStore.activeId ? ' · Active' : ''}</button>
+        <span>{item.data.collections.length} collections · {(item.data.environments || []).length} environments</span>
+        <div className="workspace-row-actions"><button className="text-button" aria-label={'Export ' + item.name} onClick={() => exportWorkspaceRecord(item)}>Export</button><button className="text-button" aria-label={'Duplicate ' + item.name} disabled={workspaceStore.workspaces.length >= 100 || !!busyId || !!runnerCollectionId} onClick={() => duplicateWorkspace(item.id)}>Duplicate</button><button className="text-button error-text" aria-label={'Delete ' + item.name} disabled={workspaceStore.workspaces.length < 2 || !!busyId || !!runnerCollectionId} onClick={() => deleteWorkspace(item.id)}>Delete</button></div>
+      </div>)}</div>
+      <label className="field-label">Workspace name<input className="field-input" maxLength={80} value={workspaceDraftName} placeholder={workspaceName} onChange={event => setWorkspaceDraftName(event.target.value)} /></label>
+      <div className="transfer-toolbar"><button className="button button-secondary" onClick={openImport}>Import</button><button className="button button-secondary" onClick={exportAllWorkspaces}>Export all workspaces</button></div>
+      <div className="modal-footer"><button className="button button-secondary" disabled={!workspaceDraftName.trim()} onClick={() => { setWorkspaceStore(current => ({ ...current, workspaces: current.workspaces.map(item => item.id === current.activeId ? { ...item, name: uniqueName(workspaceDraftName.trim(), current.workspaces.filter(other => other.id !== item.id).map(other => other.name)) } : item) })); setWorkspaceDraftName(''); }}>Rename active</button><button className="button button-primary" disabled={!workspaceDraftName.trim() || workspaceStore.workspaces.length >= 100 || !!busyId || !!runnerCollectionId} onClick={createWorkspace}>Create new workspace</button></div>
       {dialogError && <p className="dialog-error" role="alert">{dialogError}</p>}
     </Modal>}
     {modal === 'folder' && <Modal title={folderTarget?.id ? 'Rename folder' : 'New folder'} onClose={() => setModal(null)}>
@@ -658,13 +725,17 @@ export default function App() {
       </form>
     </Modal>}
     {modal === 'environment' && <Modal title="Environments" wide onClose={() => setModal(null)}>
-      <p className="modal-description">Base variables apply when no environment overrides them. Collection variables take priority over both. Switch environments to use different values for the same requests.</p>
-      <label className="field-label">Active environment<select className="field-input" value={workspace.activeEnvironmentId || ''} onChange={event => setWorkspace(current => ({ ...current, activeEnvironmentId: event.target.value || undefined }))}><option value="">Base variables only</option>{(workspace.environments || []).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-      <div className="environment-manage"><input className="field-input" aria-label="Environment name" placeholder="New environment name" value={environmentDraftName} onChange={event => setEnvironmentDraftName(event.target.value)} /><button className="button button-secondary" disabled={!environmentDraftName.trim()} onClick={() => { const id = crypto.randomUUID(); setWorkspace(current => ({ ...current, environments: [...(current.environments || []), { id, name: environmentDraftName.trim(), variables: [] }], activeEnvironmentId: id })); setEnvironmentDraftName(''); }}>Add environment</button></div>
-      {activeEnvironment(workspace) && <div className="environment-manage"><button className="text-button" disabled={!environmentDraftName.trim()} onClick={() => { setWorkspace(current => ({ ...current, environments: current.environments?.map(item => item.id === current.activeEnvironmentId ? { ...item, name: environmentDraftName.trim() } : item) })); setEnvironmentDraftName(''); }}>Rename selected</button><button className="text-button" onClick={() => { const target = activeEnvironment(workspace)!; setConfirmation({ title: 'Delete environment?', description: `“${target.name}” and its variable overrides will be deleted.`, confirmLabel: 'Delete environment', onConfirm: () => setWorkspace(current => ({ ...current, environments: current.environments?.filter(item => item.id !== target.id), activeEnvironmentId: undefined })) }); }}>Delete selected</button></div>}
+      <p className="modal-description">Environments belong to “{workspaceName}”. Collection values override the active environment, which overrides base variables.</p>
+      {(busyId || runnerCollectionId) && <p className="environment-note">Finish or cancel the current run before changing environments.</p>}
+      <fieldset className="environment-settings" disabled={!!busyId || !!runnerCollectionId}>
+      <label className="field-label">Active environment<select className="field-input" value={workspace.activeEnvironmentId || ''} onChange={event => { const id = event.target.value; setWorkspace(current => ({ ...current, activeEnvironmentId: id || undefined })); }}><option value="">Base variables only</option>{(workspace.environments || []).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <div className="environment-manage"><input className="field-input" aria-label="Environment name" maxLength={80} placeholder="Environment name" value={environmentDraftName} onChange={event => setEnvironmentDraftName(event.target.value)} /><button className="button button-secondary" disabled={!environmentDraftName.trim()} onClick={() => { const id = crypto.randomUUID(); setWorkspace(current => ({ ...current, environments: [...(current.environments || []), { id, name: uniqueName(environmentDraftName.trim(), (current.environments || []).map(item => item.name)), variables: [] }], activeEnvironmentId: id })); setEnvironmentDraftName(''); }}>Add environment</button></div>
+      {activeEnvironment(workspace) && <div className="environment-manage"><button className="text-button" disabled={!environmentDraftName.trim()} onClick={() => { setWorkspace(current => ({ ...current, environments: current.environments?.map(item => item.id === current.activeEnvironmentId ? { ...item, name: uniqueName(environmentDraftName.trim(), (current.environments || []).filter(other => other.id !== item.id).map(other => other.name)) } : item) })); setEnvironmentDraftName(''); }}>Rename selected</button><button className="text-button" onClick={duplicateEnvironment}>Duplicate selected</button><button className="text-button error-text" onClick={deleteEnvironment}>Delete selected</button></div>}
       <h3>{activeEnvironment(workspace)?.name || 'Base variables'}</h3>
       <KeyValueEditor rows={activeEnvironment(workspace)?.variables || workspace.variables} kind="variable" onChange={variables => setWorkspace(current => current.activeEnvironmentId ? { ...current, environments: current.environments?.map(item => item.id === current.activeEnvironmentId ? { ...item, variables } : item) } : { ...current, variables })} />
-      <div className="environment-note"><Icon name="lock" size={14} />Values are stored locally and included in workspace exports.</div>
+      </fieldset>
+      <div className="environment-note"><Icon name="lock" size={14} />Values are stored locally. Exports include variable values; keep files containing credentials private.</div>
+      <div className="transfer-toolbar"><button className="button button-secondary" onClick={() => { setImportScope('environments'); setModal('import'); }}>Import environments</button><button className="button button-secondary" disabled={!activeEnvironment(workspace)} onClick={() => exportEnvironmentSelection(workspace.activeEnvironmentId)}>Export selected</button><button className="button button-secondary" onClick={() => exportEnvironmentSelection()}>Export all and base variables</button></div>
       <div className="modal-footer"><button className="button button-primary" onClick={() => setModal(null)}>Done</button></div>
     </Modal>}
     {modal === 'cookies' && <Modal title="Cookie jar" wide onClose={() => setModal(null)}><CookieEditor cookies={workspace.cookies} defaultDomain={(() => { try { return new URL(draft.url).hostname; } catch { return ''; } })()} onChange={cookies => setWorkspace(current => ({ ...current, cookies }))} onClear={() => setConfirmation({ title: 'Clear cookie jar?', description: `Delete all ${workspace.cookies.length} stored cookies from this workspace?`, confirmLabel: 'Clear cookies', onConfirm: () => setWorkspace(current => ({ ...current, cookies: [] })) })} /></Modal>}
@@ -690,23 +761,7 @@ export default function App() {
         setModal(null); setToast('Request moved.');
       }}>Move request</button></div>
     </Modal>}
-    {modal === 'import' && <Modal title={pendingImport ? importFormat === 'Postman environment' ? 'Add environment?' : 'Replace active workspace?' : 'Import workspace'} wide onClose={() => setModal(null)}>
-      {pendingImport ? <>
-        <p className="modal-description">{importFormat} import. {importFormat === 'Postman environment' ? 'This adds a named environment and keeps your existing collections and variables.' : 'This replaces the active workspace’s saved collections, request history, environments, and cookie jar.'} Open request tabs will stay available. Export your current workspace first if you want to keep a backup.</p>
-        <div className="import-summary"><div><strong>{pendingImport.collections.length}</strong><span>Collections</span></div><div><strong>{pendingImport.saved.length}</strong><span>Requests</span></div><div><strong>{pendingImport.variables.length + (pendingImport.environments || []).reduce((total, item) => total + item.variables.length, 0)}</strong><span>Variables</span></div></div>
-        <div className="modal-footer"><button className="button button-secondary" onClick={() => setPendingImport(null)} data-dialog-initial-focus>Back</button><button className="button button-danger" onClick={() => { setWorkspace(pendingImport); setModal(null); setToast(importFormat === 'Postman environment' ? 'Environment imported.' : 'Workspace imported.'); }}>{importFormat === 'Postman environment' ? 'Add environment' : 'Replace active workspace'}</button></div>
-      </> : <>
-        <p className="modal-description">Drop a Reqora, Postman, Insomnia, or OpenAPI JSON export here, or paste JSON or a cURL command below. You can review the result before applying it.</p>
-        <div className={`import-drop-zone ${draggingImport ? 'dragging' : ''}`} role="region" aria-label="Drop a workspace file" onDragOver={event => { event.preventDefault(); setDraggingImport(true); }} onDragLeave={() => setDraggingImport(false)} onDrop={event => {
-          event.preventDefault(); setDraggingImport(false);
-          if (event.dataTransfer.files.length !== 1) { setDialogError('Drop one workspace JSON file at a time.'); return; }
-          void readImportFile(event.dataTransfer.files[0]);
-        }}><Icon name="upload" size={26} /><strong>Drop your workspace file</strong><span>JSON or cURL · Up to 5 MB · Processed locally</span></div>
-        <label className="field-label">Or paste JSON or cURL<textarea className="import-json" value={importText} placeholder={'{ "version": 1, "collections": [...] }'} onChange={event => { setImportText(event.target.value); setDialogError(''); }} spellCheck={false} /></label>
-        {dialogError && <p className="dialog-error" role="alert">{dialogError}</p>}
-        <div className="modal-footer"><button className="button button-secondary" onClick={() => setModal(null)}>Cancel</button><button className="button button-primary" onClick={() => reviewImport(importText)}>Review import</button></div>
-      </>}
-    </Modal>}
+    {modal === 'import' && <TransferImportDialog scope={importScope} activeWorkspaceName={workspaceName} onClose={() => setModal(null)} onApply={applyImport} />}
     {modal === 'shortcuts' && <Modal title="Keyboard shortcuts" onClose={() => setModal(null)}>
       <p className="modal-description">A few useful ways to move through your workspace.</p>
       <div className="shortcut-list"><div><span>Send the active request</span><kbd>Ctrl / ⌘ + Enter</kbd></div><div><span>Save the active request</span><kbd>Ctrl / ⌘ + S</kbd></div><div><span>Show keyboard shortcuts</span><kbd>?</kbd></div><div><span>Navigate a menu</span><kbd>↑ ↓ ← →</kbd></div><div><span>Move between controls</span><kbd>Tab / Shift + Tab</kbd></div><div><span>Close a menu or dialog</span><kbd>Esc</kbd></div></div>

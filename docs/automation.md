@@ -125,7 +125,7 @@ npm run cli -- run workspace.json --collection "My API" --environment "Staging" 
   --report results.json --junit results.xml
 ```
 
-`workspace.json` is a Reqora workspace/collection/request export. A collection selector is optional when the file contains exactly one collection. Use an ID or unique name. Select/reorder requests with repeated `--request NAME_OR_ID` flags.
+`workspace.json` is a single Reqora workspace/collection/request export. Export a workspace from **Workspaces → Export** or **File → Export workspace**; its saved named environments and active selection are included. All-workspace backups and environment-only files are intended for UI import and must first be imported and exported as a single workspace before using the CLI. A collection selector is optional when the file contains exactly one collection. Use an ID or unique name. Select/reorder requests with repeated `--request NAME_OR_ID` flags.
 
 Additional options:
 
