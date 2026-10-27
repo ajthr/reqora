@@ -22,13 +22,13 @@ Reqora now has its first working REST workflow: a shared React and TypeScript wo
 - Collection overview pages with descriptions, request lists, variable editors, and a resolved-value table showing the source of each effective variable.
 - A server-side request engine with cancellation, configurable timeouts, and optional redirect following.
 - A persistent workspace cookie jar with an editor, per-request cookie control, HTTP(S) proxy settings, custom CA certificates, and client certificates for mTLS.
-- Response status, elapsed time, decoded body size, headers, cookies, body search, safe HTML/text/JSON previews, request/response details, and downloads. Binary responses can be downloaded.
-- Named collections, saved requests, search, and the last 100 request attempts in local history.
+- Response status, elapsed time, decoded body size, headers, cookies, body search, safe HTML/text/JSON previews, request/response details, saved response examples, and downloads. Binary responses can be downloaded.
+- Named collections, one-level folders, saved requests, drag-and-drop/manual ordering, search, and the last 100 request attempts in local history.
 - Three-dot menus on requests and collections for renaming, duplication, export, and deletion; request menus also support moving between collections and copying cURL.
 - Shared in-app dialogs for editing and destructive actions, with keyboard focus containment, Escape dismissal, and focus restoration.
 - Reqora workspace JSON import/export; Postman collection/environment, Insomnia export, OpenAPI 3 JSON, and cURL command import; POSIX-shell cURL command generation.
 - Pre-request/post-response scripts at request and collection scope, response assertions, and response-to-variable extraction.
-- A sequential collection runner with JSON/CSV datasets, iterations, delay, cancellation, and optional variable persistence.
+- A sequential collection runner following saved root/folder request order, with JSON/CSV datasets, iterations, delay, cancellation, and optional variable persistence.
 - A CLI runner with JSON/JUnit reports and CI exit codes, using the same pipeline as the UI.
 - `Ctrl/Cmd + Enter` to send and `Ctrl/Cmd + S` to save.
 
@@ -36,9 +36,9 @@ Use the sidebar rail to switch between collections and history. Those views are 
 
 Open **Get a post** in the sample collection and select **Send** to try the client. The sample requests use JSONPlaceholder and require internet access. Edit **Environments** to change the shared `base_url`, or override it for an individual collection.
 
-### Collections and variable hierarchy
+### Collections, folders, and variable hierarchy
 
-Select a collection's name in the sidebar to open its overview. The arrow beside the name independently expands or collapses its requests. The overview provides an automatically saved description and a searchable request list. Its **Variables** section edits collection values and shows effective values with their source. The collection's three-dot menu also opens its overview or variables directly.
+Select a collection's name in the sidebar to open its overview. Add folders from the collection menu; drag requests into folders or reorder requests and collections in the sidebar. Menu actions provide keyboard-accessible Move up/down controls. Deleting a folder moves its requests to the collection root. Save a received response as a named example from the response panel, then inspect it on the request's Examples tab. The arrow beside the name independently expands or collapses its requests. The overview provides an automatically saved description and a searchable request list. Its **Variables** section edits collection values and shows effective values with their source. The collection's three-dot menu also opens its overview or variables directly.
 
 Variable priority, from highest to lowest, is **collection → active environment → base variables**. Unsaved requests created within a collection use that collection's variables; scratch requests use globals. Moving a saved request changes its scope to the destination collection. History replays retain the originating collection context when available.
 
@@ -52,7 +52,7 @@ Close collection and request tabs to return to the startup page. Closing an over
 
 Collections, saved request credentials, cookies, history, and environment values are stored in local browser storage without encryption. Workspace exports include those values. Multiple named workspaces are stored locally; use the Workspaces button to create, rename, switch, or delete them. New workspaces start empty. Web and desktop maintain separate data; use export/import to move a workspace between them. Save requests you want to keep before closing their tabs.
 
-To import, open **Import**, drag a Reqora, Postman, Insomnia, or OpenAPI JSON export into the dialog, or paste JSON or a cURL command. Review the detected format and counts before confirming. Postman environment imports add a named environment to the current workspace and make it active. Request and collection exports use the same workspace format and include environment values so variable references remain usable. Collection imports replace the active workspace after confirmation; they do not merge into it. Imported nested folders are flattened into request names. External formats are converted to Reqora’s supported REST fields; advanced scripts, file attachments, and unsupported authentication settings are not imported. OpenAPI YAML must be converted to JSON first. cURL import accepts common method, header, body, URL, Basic auth, redirect, and timeout options and reports unsupported options.
+To import, open **Import**, drag a Reqora, Postman, Insomnia, or OpenAPI JSON export into the dialog, or paste JSON or a cURL command. Review the detected format and counts before confirming. Postman environment imports add a named environment to the current workspace and make it active. Request and collection exports use the same workspace format and include environment values so variable references remain usable. Collection imports replace the active workspace after confirmation; they do not merge into it. Postman and Insomnia folder paths are preserved as one-level folder labels. External formats are converted to Reqora’s supported REST fields; advanced scripts, file attachments, and unsupported authentication settings are not imported. OpenAPI YAML must be converted to JSON first. cURL import accepts common method, header, body, URL, Basic auth, redirect, and timeout options and reports unsupported options.
 
 ### Request bodies
 

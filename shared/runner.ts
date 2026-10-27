@@ -1,6 +1,7 @@
 import { applyVariableChanges, MAX_EXECUTIONS } from './automation.ts';
 import type { ExecutionInput, ExecutionResult, RunItem, RunReport, RunnerOptions } from './automation.ts';
 import { validateDataRows } from './data.ts';
+import { orderedSaved } from './organization.ts';
 import { activeEnvironment, workspaceGlobals } from './workspace.ts';
 import type { Draft, Workspace } from './workspace.ts';
 import { applyAuthenticationUpdates } from './auth.ts';
@@ -12,7 +13,7 @@ export function planRun(workspace: Workspace, collectionId: string, options: Run
   if (!Number.isInteger(options.iterations) || options.iterations < 1 || options.iterations > 1000) throw new Error('Iterations must be between 1 and 1000.');
   if (!Number.isInteger(options.delayMs) || options.delayMs < 0 || options.delayMs > 60_000) throw new Error('Delay must be between 0 and 60000 milliseconds.');
   validateDataRows(options.data);
-  const saved = workspace.saved.filter(item => item.collectionId === collectionId).map(item => item.request);
+  const saved = orderedSaved(workspace, collectionId).map(item => item.request);
   const ids = options.requestIds ?? saved.map(item => item.id);
   if (!ids.length || new Set(ids).size !== ids.length) throw new Error('Select at least one request, without duplicate selections.');
   const requests = ids.map(id => { const found = saved.find(item => item.id === id); if (!found) throw new Error('A selected request is not in this collection.'); return found; });

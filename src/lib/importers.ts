@@ -27,13 +27,16 @@ function postman(data: Obj): Workspace {
   const root = collection(string(data.info?.name) || 'Postman collection', string(data.info?.description?.content || data.info?.description));
   root.variables = entries(data.variable);
   workspace.collections.push(root);
+  const folderIds = new Map<string, string>();
+  const folderFor = (name: string) => { if (!name) return undefined; let id = folderIds.get(name); if (!id) { id = crypto.randomUUID(); folderIds.set(name, id); root.folders = [...(root.folders || []), { id, name }]; } return id; };
   const visit = (items: unknown, path: string[]) => { for (const item of rows(items)) {
     if (Array.isArray(item.item)) { visit(item.item, [...path, string(item.name)]); continue; }
     if (!item.request) continue;
     const request = object(item.request), url = request.url;
-    const draft = { ...newDraft(root.id), name: [...path, string(item.name)].filter(Boolean).join(' / ') || 'Imported request', method: string(request.method).toUpperCase() || 'GET', url: typeof url === 'string' ? url : string(url?.raw), headers: entries(request.header), params: entries(url?.query) };
+    const draft = { ...newDraft(root.id), name: string(item.name) || 'Imported request', method: string(request.method).toUpperCase() || 'GET', url: typeof url === 'string' ? url : string(url?.raw), headers: entries(request.header), params: entries(url?.query) };
     body(draft, object(request.body)); auth(draft, object(request.auth));
-    workspace.saved.push({ collectionId: root.id, request: draft });
+    const examples = rows(item.response).slice(0, 30).map(sample => ({ id: crypto.randomUUID(), name: string(sample.name) || `${sample.code || 200} response`, status: Number(sample.code) || 200, statusText: string(sample.status), headers: rows(sample.header).filter(header => string(header.key)).map(header => ({ name: string(header.key), value: string(header.value) })), body: string(sample.body).slice(0, 150_000), encoding: 'utf8' as const, truncated: string(sample.body).length > 150_000 }));
+    workspace.saved.push({ collectionId: root.id, folderId: folderFor(path.filter(Boolean).join(' / ')), ...(examples.length ? { examples } : {}), request: draft });
   } };
   visit(data.item, []);
   if (!workspace.saved.length) throw new Error('The Postman collection contains no requests.');
@@ -44,12 +47,14 @@ function insomnia(data: Obj): Workspace {
   const groups = new Map<string, Obj>(resources.filter(row => row._type === 'request_group').map(row => [string(row._id), row]));
   const groupName = (id: string): string => { const names: string[] = []; const seen = new Set<string>(); while (groups.has(id) && !seen.has(id)) { seen.add(id); const group = groups.get(id)!; names.unshift(string(group.name)); id = string(group.parentId); } return names.join(' / '); };
   const root = collection(string(resources.find(row => row._type === 'workspace')?.name) || 'Insomnia collection'); workspace.collections.push(root);
+  const folderIds = new Map<string, string>();
+  const folderFor = (name: string) => { if (!name) return undefined; let id = folderIds.get(name); if (!id) { id = crypto.randomUUID(); folderIds.set(name, id); root.folders = [...(root.folders || []), { id, name }]; } return id; };
   for (const item of resources.filter(row => row._type === 'request')) {
-    const draft = { ...newDraft(root.id), name: [groupName(string(item.parentId)), string(item.name)].filter(Boolean).join(' / ') || 'Imported request', method: string(item.method).toUpperCase() || 'GET', url: string(item.url), headers: entries(item.headers, 'name'), params: entries(item.parameters, 'name') };
+    const draft = { ...newDraft(root.id), name: string(item.name) || 'Imported request', method: string(item.method).toUpperCase() || 'GET', url: string(item.url), headers: entries(item.headers, 'name'), params: entries(item.parameters, 'name') };
     const b = object(item.body); if (typeof b.text === 'string') { draft.body = b.text; draft.bodyType = string(b.mimeType).includes('json') ? 'json' : string(b.mimeType).includes('xml') ? 'xml' : 'text'; }
     if (Array.isArray(b.params)) { draft.bodyType = 'form'; draft.formFields = entries(b.params, 'name'); }
     const a = object(item.authentication); if (a.type === 'basic') { draft.authType = 'basic'; draft.username = string(a.username); draft.password = string(a.password); } else if (a.type === 'bearer') { draft.authType = 'bearer'; draft.token = string(a.token); }
-    workspace.saved.push({ collectionId: root.id, request: draft });
+    workspace.saved.push({ collectionId: root.id, folderId: folderFor(groupName(string(item.parentId))), request: draft });
   }
   for (const env of resources.filter(row => row._type === 'environment' && !row.isPrivate)) {
     const variables = Object.entries(object(env.data)).map(([key, value]) => newEntry(key, String(value)));

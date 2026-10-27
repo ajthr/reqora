@@ -6,6 +6,7 @@ import ResponseInspector from './components/ResponseInspector';
 import type { ResponseView } from './components/ResponseInspector';
 import { responseCookies } from './components/ResponseInspector';
 import { importWorkspace } from './lib/importers';
+import { moveCollectionBefore, moveFolderBefore, moveSaved, orderedSaved, shiftCollection, shiftFolder, shiftSaved } from '../shared/organization';
 import BodyEditor from './components/BodyEditor';
 import { readRequestFiles } from './lib/attachments';
 import { applyVariableChanges } from '../shared/automation';
@@ -29,7 +30,7 @@ import Startup from './components/Startup';
 import CollectionOverview from './components/CollectionOverview';
 import type { CollectionSection } from './components/CollectionOverview';
 import { closeRequestTab, formatSize, getRequestCollection, getVariableScope, newDraft } from './lib/workspace';
-import type { Collection, Draft, Workspace } from './lib/workspace';
+import type { Collection, Draft, ResponseExample, SavedRequest, Workspace } from './lib/workspace';
 import { emptyWorkspace, loadWorkspaceStore, STORE_KEY } from './lib/workspace-store';
 import type { WorkspaceRecord } from './lib/workspace-store';
 import { activeEnvironment, workspaceGlobals } from './lib/workspace';
@@ -37,7 +38,7 @@ import { brandingInteractionProps } from './lib/branding';
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 type Result = Partial<ExecutionResult>;
-type EditorTab = 'Params' | 'Headers' | 'Body' | 'Auth' | 'Scripts' | 'Tests' | 'Settings';
+type EditorTab = 'Params' | 'Headers' | 'Body' | 'Auth' | 'Scripts' | 'Tests' | 'Examples' | 'Settings';
 
 function download(name: string, content: BlobPart, type: string) {
   const url = URL.createObjectURL(new Blob([content], { type }));
@@ -72,7 +73,7 @@ export default function App() {
   const [sidebarTab, setSidebarTab] = useState<'collections' | 'history'>('collections');
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState<string[]>([]);
-  const [modal, setModal] = useState<'workspaces' | 'save' | 'collection' | 'environment' | 'cookies' | 'curl' | 'import' | 'rename' | 'move' | 'shortcuts' | 'about' | 'engine' | null>(null);
+  const [modal, setModal] = useState<'workspaces' | 'folder' | 'organize' | 'example' | 'save' | 'collection' | 'environment' | 'cookies' | 'curl' | 'import' | 'rename' | 'move' | 'shortcuts' | 'about' | 'engine' | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [importText, setImportText] = useState('');
   const [runnerCollectionId, setRunnerCollectionId] = useState<string | null>(null);
@@ -85,6 +86,12 @@ export default function App() {
   const [saveName, setSaveName] = useState('');
   const [collectionId, setCollectionId] = useState(workspace.collections[0]?.id || '');
   const [collectionName, setCollectionName] = useState('');
+  const [folderName, setFolderName] = useState('');
+  const [folderTarget, setFolderTarget] = useState<{ collectionId: string; id?: string } | null>(null);
+  const [organizeRequestId, setOrganizeRequestId] = useState('');
+  const [organizeFolderId, setOrganizeFolderId] = useState('');
+  const [collapsedFolders, setCollapsedFolders] = useState<string[]>([]);
+  const [exampleName, setExampleName] = useState('');
   const [workspaceDraftName, setWorkspaceDraftName] = useState('');
   const [environmentDraftName, setEnvironmentDraftName] = useState('');
   const [toast, setToast] = useState('');
@@ -206,7 +213,7 @@ export default function App() {
     if (!hasRequest) return;
     const request = { ...draft, name: name.trim() || 'Untitled request', collectionId: targetCollection };
     updateDraft({ name: request.name, collectionId: targetCollection });
-    setWorkspace(current => ({ ...current, saved: [...current.saved.filter(item => item.request.id !== request.id), { collectionId: targetCollection, request: structuredClone(request) }] }));
+    setWorkspace(current => ({ ...current, saved: current.saved.some(item => item.request.id === request.id) ? current.saved.map(item => item.request.id === request.id ? { ...item, collectionId: targetCollection, request: structuredClone(request) } : item) : [...current.saved, { collectionId: targetCollection, request: structuredClone(request) }] }));
     setModal(null);
     setToast('Request saved to your collection.');
   }
@@ -300,16 +307,54 @@ export default function App() {
     setToast(`${requestId ? 'Request' : 'Collection'} exported in Reqora format.`);
   }
 
+  function openFolder(collectionId: string, id?: string) {
+    const folder = workspace.collections.find(item => item.id === collectionId)?.folders?.find(item => item.id === id);
+    setFolderTarget({ collectionId, id }); setFolderName(folder?.name || ''); setModal('folder');
+  }
+  function saveFolder() {
+    const name = folderName.trim();
+    if (!name || !folderTarget) { setDialogError('Enter a folder name.'); return; }
+    const { collectionId, id } = folderTarget;
+    setWorkspace(current => ({ ...current, collections: current.collections.map(item => item.id !== collectionId ? item : id
+      ? { ...item, folders: (item.folders || []).map(folder => folder.id === id ? { ...folder, name } : folder) }
+      : { ...item, folders: [...(item.folders || []), { id: crypto.randomUUID(), name }] }) }));
+    setModal(null);
+  }
+  function folderActions(collection: Collection, folderId: string): MenuAction[] {
+    const folders = collection.folders || [], index = folders.findIndex(item => item.id === folderId);
+    return [
+      { label: 'Rename folder', icon: 'edit', onSelect: () => openFolder(collection.id, folderId) },
+      { label: 'Move folder up', icon: 'arrow', disabled: index <= 0, onSelect: () => setWorkspace(current => ({ ...current, collections: current.collections.map(item => item.id === collection.id ? shiftFolder(item, folderId, -1) : item) })) },
+      { label: 'Move folder down', icon: 'arrow', disabled: index >= folders.length - 1, onSelect: () => setWorkspace(current => ({ ...current, collections: current.collections.map(item => item.id === collection.id ? shiftFolder(item, folderId, 1) : item) })) },
+      { label: 'Delete folder', icon: 'trash', danger: true, separator: true, onSelect: () => setConfirmation({ title: 'Delete folder?', description: 'Requests in this folder will move to the collection root.', confirmLabel: 'Delete folder', onConfirm: () => setWorkspace(current => ({ ...current, collections: current.collections.map(item => item.id === collection.id ? { ...item, folders: (item.folders || []).filter(folder => folder.id !== folderId) } : item), saved: current.saved.map(item => item.collectionId === collection.id && item.folderId === folderId ? { ...item, folderId: undefined } : item) })) }) },
+    ];
+  }
+  function dropRequest(event: React.DragEvent, collectionId: string, folderId?: string, beforeId?: string) {
+    event.preventDefault(); event.stopPropagation();
+    const id = event.dataTransfer.getData('text/reqora-request');
+    if (!workspace.saved.some(item => item.request.id === id && item.collectionId === collectionId)) return;
+    setWorkspace(current => moveSaved(current, id, folderId, beforeId));
+  }
+  function saveExample() {
+    if (!response || !saved || !exampleName.trim()) return;
+    const example: ResponseExample = { id: crypto.randomUUID(), name: exampleName.trim(), status: response.status, statusText: response.statusText, headers: response.headers, body: response.body.slice(0, 150_000), encoding: response.encoding, truncated: response.body.length > 150_000 };
+    setWorkspace(current => ({ ...current, saved: current.saved.map(item => item.request.id === draft.id ? { ...item, examples: [...(item.examples || []), example] } : item) }));
+    setModal(null); setToast('Response example saved.');
+  }
+
   function requestActions(request: Draft, collection: Collection): MenuAction[] {
     return [
       { label: 'Open request', icon: 'file', onSelect: () => openRequest(request) },
       { label: 'Rename', icon: 'edit', onSelect: () => renameItem('request', request.id, request.name) },
       { label: 'Duplicate request', icon: 'copy', onSelect: () => {
         const clone = { ...duplicateRequest(request), name: `${request.name} copy` };
-        setWorkspace(current => ({ ...current, saved: [...current.saved, { collectionId: collection.id, request: clone }] }));
+        setWorkspace(current => ({ ...current, saved: [...current.saved, { collectionId: collection.id, folderId: workspace.saved.find(item => item.request.id === request.id)?.folderId, examples: workspace.saved.find(item => item.request.id === request.id)?.examples?.map(example => ({ ...example, id: crypto.randomUUID() })), request: clone }] }));
         openRequest(clone);
         setToast('Request duplicated.');
       } },
+      { label: 'Organize in folder', icon: 'folder', onSelect: () => { setOrganizeRequestId(request.id); setOrganizeFolderId(workspace.saved.find(item => item.request.id === request.id)?.folderId || ''); setModal('organize'); } },
+      { label: 'Move up', icon: 'arrow', onSelect: () => setWorkspace(current => shiftSaved(current, request.id, -1)) },
+      { label: 'Move down', icon: 'arrow', onSelect: () => setWorkspace(current => shiftSaved(current, request.id, 1)) },
       { label: 'Move to collection', icon: 'move', disabled: workspace.collections.length < 2, onSelect: () => {
         setActionTarget({ kind: 'request', id: request.id });
         setMoveCollectionId(collection.id);
@@ -335,11 +380,15 @@ export default function App() {
       { label: 'Collection scripts', icon: 'code', onSelect: () => openCollection(collection.id, 'scripts') },
       { label: 'Run collection', icon: 'send', disabled: !requests.length || !!busyId, onSelect: () => setRunnerCollectionId(collection.id) },
       { label: 'New request', icon: 'plus', onSelect: () => createCollectionRequest(collection.id), separator: true },
+      { label: 'New folder', icon: 'folder', onSelect: () => openFolder(collection.id) },
+      { label: 'Move collection up', icon: 'arrow', disabled: workspace.collections[0]?.id === collection.id, onSelect: () => setWorkspace(current => shiftCollection(current, collection.id, -1)) },
+      { label: 'Move collection down', icon: 'arrow', disabled: workspace.collections.at(-1)?.id === collection.id, onSelect: () => setWorkspace(current => shiftCollection(current, collection.id, 1)) },
       { label: 'Rename collection', icon: 'edit', onSelect: () => renameItem('collection', collection.id, collection.name) },
       { label: 'Duplicate collection', icon: 'copy', onSelect: () => {
         const id = crypto.randomUUID();
-        const copiedCollection = { ...collection, id, name: `${collection.name} copy`, variables: collection.variables.map(row => ({ ...row, id: crypto.randomUUID() })) };
-        const copiedRequests = requests.map(item => ({ collectionId: id, request: { ...duplicateRequest(item.request), collectionId: id } }));
+        const folderIds = new Map((collection.folders || []).map(folder => [folder.id, crypto.randomUUID()]));
+        const copiedCollection = { ...collection, id, name: `${collection.name} copy`, variables: collection.variables.map(row => ({ ...row, id: crypto.randomUUID() })), folders: (collection.folders || []).map(folder => ({ ...folder, id: folderIds.get(folder.id)! })) };
+        const copiedRequests = requests.map(item => ({ ...item, collectionId: id, folderId: item.folderId ? folderIds.get(item.folderId) : undefined, examples: item.examples?.map(example => ({ ...example, id: crypto.randomUUID() })), request: { ...duplicateRequest(item.request), collectionId: id } }));
         setWorkspace(current => ({ ...current, collections: [...current.collections, copiedCollection], saved: [...current.saved, ...copiedRequests] }));
         setToast('Collection duplicated.');
       } },
@@ -480,7 +529,7 @@ export default function App() {
     {mobileSidebar && <button className="sidebar-backdrop" aria-label="Close sidebar" onClick={() => setMobileSidebar(false)} />}
     <aside className={`sidebar ${mobileSidebar ? 'mobile-open' : ''}`}>
       <div className="workspace-brand" {...brandingInteractionProps}><span>reqora<span className="brand-period">.</span></span><span className="version-badge">BETA</span></div>
-      <div className="workspace-switch"><div className="workspace-icon"><Icon name="layers" size={18} /></div><div><strong>My workspace</strong><span>Local · Personal</span></div><Icon name="lock" size={13} /></div>
+      <button className="workspace-switch" onClick={() => setModal('workspaces')} title="Switch workspace"><div className="workspace-icon"><Icon name="layers" size={18} /></div><div><strong>{workspaceName}</strong><span>Local · Personal</span></div><Icon name="lock" size={13} /></button>
       <label className="sidebar-search"><Icon name="search" size={15} /><input aria-label="Search requests" placeholder="Search requests..." value={search} onChange={event => setSearch(event.target.value)} /><kbd>⌕</kbd></label>
       <div className="sidebar-section-heading"><span>{sidebarTab === 'collections' ? 'YOUR COLLECTIONS' : 'RECENT REQUESTS'}</span><button className="icon-button" title={sidebarTab === 'collections' ? 'New collection' : 'Clear history'} onClick={() => {
         if (sidebarTab === 'collections') { setCollectionName(''); setModal('collection'); }
@@ -489,13 +538,24 @@ export default function App() {
       <div className="sidebar-content">
         {sidebarTab === 'collections' ? <>
           {workspace.collections.map(item => {
-            const requests = workspace.saved.filter(saved => saved.collectionId === item.id && `${saved.request.name} ${saved.request.url} ${saved.request.method}`.toLowerCase().includes(search.toLowerCase()));
+            const matching = (saved: SavedRequest) => `${saved.request.name} ${saved.request.url} ${saved.request.method}`.toLowerCase().includes(search.toLowerCase());
+            const requests = orderedSaved(workspace, item.id).filter(matching);
+            const folders = item.folders || [];
+            const validFolders = new Set(folders.map(folder => folder.id));
+            const rootRequests = requests.filter(saved => !saved.folderId || !validFolders.has(saved.folderId));
+            const row = ({ request }: SavedRequest) => <div className={`saved-request ${!activeOverview && activeId === request.id ? 'active' : ''}`} key={request.id} draggable onDragStart={event => event.dataTransfer.setData('text/reqora-request', request.id)} onDragOver={event => event.preventDefault()} onDrop={event => dropRequest(event, item.id, workspace.saved.find(saved => saved.request.id === request.id)?.folderId, request.id)}>
+              <button onClick={() => openRequest(request)} title={request.url}><span className={`method-label method-${request.method.toLowerCase()}`}>{request.method}</span><span>{request.name}</span></button>
+              <ActionMenu label={`Options for request ${request.name}`} actions={requestActions(request, item)} />
+            </div>;
             return <section className="collection-group" key={item.id}>
-              <div className={`collection-row ${activeOverview?.id === item.id ? 'overview-selected' : ''}`}><button className="icon-button collection-toggle" aria-label={`${collapsed.includes(item.id) ? 'Expand' : 'Collapse'} ${item.name}`} onClick={() => setCollapsed(current => current.includes(item.id) ? current.filter(id => id !== item.id) : [...current, item.id])} aria-expanded={!collapsed.includes(item.id)}><Icon name="chevron" size={12} className={!collapsed.includes(item.id) ? 'expanded' : ''} /></button><button className="collection-heading" onClick={() => openCollection(item.id)} title={`Open ${item.name} overview`}><Icon name="folder" size={17} /><span>{item.name}</span><small>{requests.length}</small></button><ActionMenu label={`Options for collection ${item.name}`} actions={collectionActions(item)} /></div>
-              {!collapsed.includes(item.id) && <div className="collection-requests">{requests.map(({ request }) => <div className={`saved-request ${!activeOverview && activeId === request.id ? 'active' : ''}`} key={request.id}>
-                <button onClick={() => openRequest(request)} title={request.url}><span className={`method-label method-${request.method.toLowerCase()}`}>{request.method}</span><span>{request.name}</span></button>
-                <ActionMenu label={`Options for request ${request.name}`} actions={requestActions(request, item)} />
-              </div>)}{!requests.length && <span className="collection-empty">{search ? 'No matching requests' : 'No saved requests yet'}</span>}</div>}
+              <div className={`collection-row ${activeOverview?.id === item.id ? 'overview-selected' : ''}`} draggable onDragStart={event => event.dataTransfer.setData('text/reqora-collection', item.id)} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); const source = event.dataTransfer.getData('text/reqora-collection'); if (source) setWorkspace(current => moveCollectionBefore(current, source, item.id)); }}><button className="icon-button collection-toggle" aria-label={`${collapsed.includes(item.id) ? 'Expand' : 'Collapse'} ${item.name}`} onClick={() => setCollapsed(current => current.includes(item.id) ? current.filter(id => id !== item.id) : [...current, item.id])} aria-expanded={!collapsed.includes(item.id)}><Icon name="chevron" size={12} className={!collapsed.includes(item.id) ? 'expanded' : ''} /></button><button className="collection-heading" onClick={() => openCollection(item.id)} title={`Open ${item.name} overview`}><Icon name="folder" size={17} /><span>{item.name}</span><small>{requests.length}</small></button><ActionMenu label={`Options for collection ${item.name}`} actions={collectionActions(item)} /></div>
+              {!collapsed.includes(item.id) && <div className="collection-requests"><div className="collection-root-drop" onDragOver={event => event.preventDefault()} onDrop={event => dropRequest(event, item.id)}>Collection root</div>{rootRequests.map(row)}
+                {folders.filter(folder => !search || folder.name.toLowerCase().includes(search.toLowerCase()) || requests.some(saved => saved.folderId === folder.id)).map(folder => <div className="sidebar-folder" key={folder.id}>
+                  <div className="sidebar-folder-heading" draggable onDragStart={event => { event.stopPropagation(); event.dataTransfer.setData('text/reqora-folder', folder.id); }} onDragOver={event => event.preventDefault()} onDrop={event => { const source = event.dataTransfer.getData('text/reqora-folder'); if (source) { event.preventDefault(); event.stopPropagation(); setWorkspace(current => ({ ...current, collections: current.collections.map(group => group.id === item.id ? moveFolderBefore(group, source, folder.id) : group) })); } else dropRequest(event, item.id, folder.id); }}><button className="icon-button" aria-label={`${collapsedFolders.includes(folder.id) ? 'Expand' : 'Collapse'} ${folder.name}`} onClick={() => setCollapsedFolders(current => current.includes(folder.id) ? current.filter(id => id !== folder.id) : [...current, folder.id])}><Icon name="chevron" size={11} className={!collapsedFolders.includes(folder.id) ? 'expanded' : ''} /></button><button className="folder-name" onClick={() => setCollapsedFolders(current => current.includes(folder.id) ? current.filter(id => id !== folder.id) : [...current, folder.id])}><Icon name="folder" size={14} />{folder.name}<small>{requests.filter(saved => saved.folderId === folder.id).length}</small></button><ActionMenu label={`Options for folder ${folder.name}`} actions={folderActions(item, folder.id)} /></div>
+                  {!collapsedFolders.includes(folder.id) && <div className="folder-requests">{requests.filter(saved => saved.folderId === folder.id).map(row)}</div>}
+                </div>)}
+                {!requests.length && !folders.length && <span className="collection-empty">{search ? 'No matching requests' : 'No saved requests yet'}</span>}
+              </div>}
             </section>;
           })}
           <button className="sidebar-new-request" onClick={addRequest}><Icon name="plus" size={15} /> New request</button>
@@ -518,7 +578,7 @@ export default function App() {
         <button className="icon-button new-tab" aria-label="New request" title="New request" onClick={addRequest}><Icon name="plus" size={18} /></button>
       </div>}
 
-      {activeOverview ? <CollectionOverview key={activeOverview.id} collection={activeOverview} requests={workspace.saved.filter(item => item.collectionId === activeOverview.id).map(item => item.request)} globals={workspaceGlobals(workspace)} section={collectionSection} onSectionChange={setCollectionSection} onChange={changes => setWorkspace(current => ({ ...current, collections: current.collections.map(item => item.id === activeOverview.id ? { ...item, ...changes } : item) }))} onOpenRequest={openRequest} onNewRequest={() => createCollectionRequest(activeOverview.id)} onGlobals={() => setModal('environment')} onRun={() => { if (busyId) setToast('Cancel the current request before running a collection.'); else setRunnerCollectionId(activeOverview.id); }} actions={collectionActions(activeOverview)} requestActions={request => requestActions(request, activeOverview)} /> : hasRequest ? <div className="request-workspace">
+      {activeOverview ? <CollectionOverview key={activeOverview.id} collection={activeOverview} requests={orderedSaved(workspace, activeOverview.id).map(item => item.request)} folderName={requestId => { const folderId = workspace.saved.find(item => item.request.id === requestId)?.folderId; return activeOverview.folders?.find(folder => folder.id === folderId)?.name; }} globals={workspaceGlobals(workspace)} section={collectionSection} onSectionChange={setCollectionSection} onChange={changes => setWorkspace(current => ({ ...current, collections: current.collections.map(item => item.id === activeOverview.id ? { ...item, ...changes } : item) }))} onOpenRequest={openRequest} onNewRequest={() => createCollectionRequest(activeOverview.id)} onGlobals={() => setModal('environment')} onRun={() => { if (busyId) setToast('Cancel the current request before running a collection.'); else setRunnerCollectionId(activeOverview.id); }} actions={collectionActions(activeOverview)} requestActions={request => requestActions(request, activeOverview)} /> : hasRequest ? <div className="request-workspace">
         <div className="request-heading"><div className="request-location"><Icon name="folder" size={16} /><button className="request-collection-link" disabled={!collection} onClick={() => collection && openCollection(collection.id)}>{collection?.name || 'Scratchpad'}</button><Icon name="chevron" size={12} /><input aria-label="Request name" value={draft.name} onChange={event => updateDraft({ name: event.target.value })} /></div><div className="request-actions"><button className="text-button code-button" title="Generate cURL command" onClick={() => setModal('curl')}><Icon name="code" size={16} /> Code</button><button className="button button-secondary save-button" onClick={saveRequest}><Icon name="save" size={15} /> Save{dirty && <span className="unsaved-dot" />}</button></div></div>
         <form className="url-bar" onSubmit={event => { event.preventDefault(); void sendRequest(); }}>
           <div className="url-input-group"><select className={`method-select method-${draft.method.toLowerCase()}`} aria-label="HTTP method" value={draft.method} onChange={event => updateDraft({ method: event.target.value })}>{METHODS.map(method => <option key={method}>{method}</option>)}</select><div className="url-divider" /><input className="url-input" aria-label="Request URL" placeholder="Enter a URL or paste an endpoint" value={draft.url} onChange={event => updateDraft({ url: event.target.value })} spellCheck={false} autoComplete="off" /><span className="url-protocol"><Icon name="lock" size={14} /></span></div>
@@ -529,19 +589,20 @@ export default function App() {
           {collection && <><button onClick={() => openCollection(collection.id, 'variables')} title="Edit collection variables">{collection.name}</button><Icon name="chevron" size={12} /></>}
           <button onClick={() => setModal('environment')}>Global environment</button><span>{effectiveVariables.length} effective variable{effectiveVariables.length === 1 ? '' : 's'}</span>
         </div>
-        <div className={`request-editor ${['Body', 'Auth', 'Scripts', 'Tests'].includes(editorTab) ? 'body-active' : ''}`}><nav className="editor-tabs" aria-label="Request configuration">{(['Params', 'Headers', 'Body', 'Auth', 'Scripts', 'Tests', 'Settings'] as EditorTab[]).map(tab => <button key={tab} className={editorTab === tab ? 'active' : ''} onClick={() => setEditorTab(tab)}>{tab}{tab === 'Params' && count(draft.params) > 0 && <span className="tab-count">{count(draft.params)}</span>}{tab === 'Headers' && count(draft.headers) > 0 && <span className="tab-count">{count(draft.headers)}</span>}{tab === 'Auth' && effectiveAuth(draft, collection?.auth).authType !== 'none' && <Icon name="lock" size={11} />}{tab === 'Body' && draft.bodyType !== 'none' && !['GET', 'HEAD'].includes(draft.method) && <span className="configured-dot" />}</button>)}<span className="editor-hint">Use <code>{'{{variables}}'}</code> anywhere</span></nav>
+        <div className={`request-editor ${['Body', 'Auth', 'Scripts', 'Tests', 'Examples'].includes(editorTab) ? 'body-active' : ''}`}><nav className="editor-tabs" aria-label="Request configuration">{(['Params', 'Headers', 'Body', 'Auth', 'Scripts', 'Tests', 'Examples', 'Settings'] as EditorTab[]).map(tab => <button key={tab} className={editorTab === tab ? 'active' : ''} onClick={() => setEditorTab(tab)}>{tab}{tab === 'Params' && count(draft.params) > 0 && <span className="tab-count">{count(draft.params)}</span>}{tab === 'Headers' && count(draft.headers) > 0 && <span className="tab-count">{count(draft.headers)}</span>}{tab === 'Auth' && effectiveAuth(draft, collection?.auth).authType !== 'none' && <Icon name="lock" size={11} />}{tab === 'Body' && draft.bodyType !== 'none' && !['GET', 'HEAD'].includes(draft.method) && <span className="configured-dot" />}</button>)}<span className="editor-hint">Use <code>{'{{variables}}'}</code> anywhere</span></nav>
           <div className="editor-content">
             {editorTab === 'Params' && <><div className="panel-label">Query parameters <span>Added to the URL when you send</span></div><KeyValueEditor rows={draft.params} onChange={params => updateDraft({ params })} /></>}
             {editorTab === 'Headers' && <><div className="panel-label">Request headers <span>Only checked rows are sent</span></div><KeyValueEditor rows={draft.headers} kind="header" onChange={headers => updateDraft({ headers })} /></>}
             {editorTab === 'Body' && <BodyEditor key={draft.id} draft={draft} onChange={updateDraft} />}
             {editorTab === 'Scripts' && <ScriptEditor value={draft} onChange={updateDraft} />}
             {editorTab === 'Tests' && <ChecksEditor value={draft} onChange={updateDraft} />}
+            {editorTab === 'Examples' && <div className="request-examples"><div className="panel-label">Saved response examples <span>{saved?.examples?.length || 0}</span></div>{!saved && <p>Save this request to add examples.</p>}{saved && !(saved.examples || []).length && <p>Send this request and save its response as an example.</p>}{(saved?.examples || []).map(example => <details key={example.id}><summary><strong>{example.name}</strong><span>{example.status} {example.statusText}</span></summary><div className="example-actions"><button className="text-button" onClick={() => void copy(example.body)}>Copy body</button><button className="text-button" onClick={() => setConfirmation({ title: 'Delete example?', description: `“${example.name}” will be removed from this request.`, confirmLabel: 'Delete example', onConfirm: () => setWorkspace(current => ({ ...current, saved: current.saved.map(item => item.request.id === draft.id ? { ...item, examples: item.examples?.filter(savedExample => savedExample.id !== example.id) } : item) })) })}>Delete</button></div><div className="example-headers">{example.headers.map((header, index) => <div key={index}><strong>{header.name}</strong><span>{header.value}</span></div>)}</div>{example.truncated && <p>Saved example body is limited to 150,000 characters.</p>}<pre>{example.body}</pre></details>)}</div>}
             {editorTab === 'Auth' && <AuthEditor key={draft.id} value={draft} collectionAuth={collection?.auth} collectionName={collection?.name} variables={effectiveVariables} onChange={updateDraft} />}
             {editorTab === 'Settings' && <RequestSettings draft={draft} onChange={updateDraft} cookieCount={workspace.cookies.length} onOpenCookies={() => setModal('cookies')} />}
           </div>
         </div>
 
-        <section className="response-panel" aria-label="Response"><div className="response-heading"><div className="response-title"><Icon name="terminal" size={17} /><strong>Response</strong>{response && <span className={`response-status ${response.status < 400 ? 'status-success' : 'status-error'}`}>{response.status} {response.statusText}</span>}</div>{response ? <div className="response-metrics"><span><Icon name="history" size={13} />{response.durationMs} <small>ms</small></span><span><Icon name="file" size={13} />{formatSize(response.size)}</span><button className="icon-button" title="Download response" aria-label="Download response" onClick={downloadResponse}><Icon name="download" size={16} /></button></div> : <span className="response-placeholder-label">{busyId === draft.id ? 'REQUEST IN PROGRESS' : 'READY WHEN YOU ARE'}</span>}</div>
+        <section className="response-panel" aria-label="Response"><div className="response-heading"><div className="response-title"><Icon name="terminal" size={17} /><strong>Response</strong>{response && <span className={`response-status ${response.status < 400 ? 'status-success' : 'status-error'}`}>{response.status} {response.statusText}</span>}</div>{response ? <div className="response-metrics"><span><Icon name="history" size={13} />{response.durationMs} <small>ms</small></span><span><Icon name="file" size={13} />{formatSize(response.size)}</span>{saved && <button className="text-button" title="Save this response as an example" onClick={() => { setExampleName(`${response.status} ${response.statusText}`); setModal('example'); }}>Save example</button>}<button className="icon-button" title="Download response" aria-label="Download response" onClick={downloadResponse}><Icon name="download" size={16} /></button></div> : <span className="response-placeholder-label">{busyId === draft.id ? 'REQUEST IN PROGRESS' : 'READY WHEN YOU ARE'}</span>}</div>
           {busyId === draft.id ? <div className="response-empty" role="status"><div className="sending-orbit"><Icon name="send" size={28} /></div><h2>On its way.</h2><p>Waiting for your server to respond…</p><button className="text-button" onClick={() => controller.current?.abort()}>Cancel request</button></div> : result?.error && !response ? <div className="response-empty error-state" role="alert"><div className="empty-illustration"><Icon name="alert" size={28} /></div><h2>{result.error === 'Request cancelled.' ? 'Request cancelled' : 'Something needs a second look'}</h2><p>{result.error}</p><button className="button button-secondary" onClick={() => void sendRequest()}><Icon name="send" size={14} /> Try again</button></div> : response ? <>
             <div className="response-toolbar"><nav aria-label="Response view">{(['Body', 'Preview', 'Headers', 'Cookies', 'Details', 'Tests'] as ResponseView[]).map(view => <button key={view} className={responseTab === view ? 'active' : ''} onClick={() => setResponseTab(view)}>{view}{view === 'Headers' ? ` ${response.headers.length}` : view === 'Cookies' ? ` ${responseCookies(response).length}` : view === 'Tests' ? ` ${result?.tests?.length || 0}` : ''}</button>)}</nav><div className="response-view-actions">{responseTab === 'Body' && response.encoding === 'utf8' && <><input className="response-search" aria-label="Search response body" placeholder="Find in body" value={responseSearch} onChange={event => setResponseSearch(event.target.value)} /><div className="segmented-control"><button className={pretty ? 'active' : ''} onClick={() => setPretty(true)}>Pretty</button><button className={!pretty ? 'active' : ''} onClick={() => setPretty(false)}>Raw</button></div></>}<button className="icon-button" title="Copy response view" aria-label="Copy response view" onClick={() => void copy(responseTab === 'Tests' ? JSON.stringify({ tests: result?.tests, logs: result?.logs, error: result?.error }, null, 2) : responseTab === 'Headers' ? response.headers.map(header => `${header.name}: ${header.value}`).join('\n') : responseTab === 'Cookies' ? responseCookies(response).join('\n') : responseTab === 'Details' ? `${draft.method} ${draft.url}\n${response.status} ${response.statusText}\n${response.url}\n${response.durationMs} ms` : response.body)}><Icon name="copy" size={15} /></button></div></div>
             <div className="response-content">{responseTab === 'Tests' ? <AutomationResults tests={result?.tests} logs={result?.logs} error={result?.error} /> : <ResponseInspector response={response} view={responseTab} pretty={pretty} search={responseSearch} requestMethod={draft.method} requestUrl={draft.url} onDownload={downloadResponse} />}</div>
@@ -563,6 +624,17 @@ export default function App() {
       <label className="field-label">Rename active workspace<input className="field-input" value={workspaceDraftName} placeholder={workspaceName} onChange={event => setWorkspaceDraftName(event.target.value)} /></label>
       <div className="modal-footer"><button className="button button-secondary" disabled={!workspaceDraftName.trim()} onClick={() => { setWorkspaceStore(current => ({ ...current, workspaces: current.workspaces.map(item => item.id === current.activeId ? { ...item, name: workspaceDraftName.trim() } : item) })); setWorkspaceDraftName(''); }}>Rename active</button><button className="button button-primary" disabled={!workspaceDraftName.trim() || workspaceStore.workspaces.length >= 100 || !!busyId || !!runnerCollectionId} onClick={createWorkspace}>Create new workspace</button></div>
       {dialogError && <p className="dialog-error" role="alert">{dialogError}</p>}
+    </Modal>}
+    {modal === 'folder' && <Modal title={folderTarget?.id ? 'Rename folder' : 'New folder'} onClose={() => setModal(null)}>
+      <form onSubmit={event => { event.preventDefault(); saveFolder(); }}><label className="field-label">Folder name<input className="field-input" value={folderName} onChange={event => setFolderName(event.target.value)} /></label>{dialogError && <p className="dialog-error" role="alert">{dialogError}</p>}<div className="modal-footer"><button type="button" className="button button-secondary" onClick={() => setModal(null)}>Cancel</button><button className="button button-primary" disabled={!folderName.trim()}>Save folder</button></div></form>
+    </Modal>}
+    {modal === 'organize' && <Modal title="Organize request" onClose={() => setModal(null)}>
+      <label className="field-label">Folder<select className="field-input" value={organizeFolderId} onChange={event => setOrganizeFolderId(event.target.value)}><option value="">Collection root</option>{(workspace.collections.find(item => item.id === workspace.saved.find(saved => saved.request.id === organizeRequestId)?.collectionId)?.folders || []).map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
+      <div className="modal-footer"><button className="button button-secondary" onClick={() => setModal(null)}>Cancel</button><button className="button button-primary" onClick={() => { setWorkspace(current => moveSaved(current, organizeRequestId, organizeFolderId || undefined)); setModal(null); }}>Move request</button></div>
+    </Modal>}
+    {modal === 'example' && <Modal title="Save response example" onClose={() => setModal(null)}>
+      <p className="modal-description">Save this response with the request. Examples are included in workspace exports. Bodies larger than 150,000 characters are truncated.</p>
+      <form onSubmit={event => { event.preventDefault(); saveExample(); }}><label className="field-label">Example name<input className="field-input" value={exampleName} onChange={event => setExampleName(event.target.value)} /></label><div className="modal-footer"><button type="button" className="button button-secondary" onClick={() => setModal(null)}>Cancel</button><button className="button button-primary" disabled={!exampleName.trim() || (saved?.examples?.length || 0) >= 30}>Save example</button></div></form>
     </Modal>}
     {modal === 'save' && <Modal title="Save request" onClose={() => setModal(null)}>
       <form noValidate onSubmit={event => { event.preventDefault(); if (!saveName.trim()) { setDialogError('Enter a request name.'); return; } if (collectionId) persistRequest(saveName, collectionId); }}>
@@ -609,7 +681,7 @@ export default function App() {
       <label className="field-label">Destination collection<select className="field-input" value={moveCollectionId} onChange={event => setMoveCollectionId(event.target.value)}>{workspace.collections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       <div className="modal-footer"><button className="button button-secondary" onClick={() => setModal(null)}>Cancel</button><button className="button button-primary" disabled={!moveCollectionId} onClick={() => {
         if (!actionTarget) return;
-        setWorkspace(current => ({ ...current, saved: current.saved.map(item => item.request.id === actionTarget.id ? { ...item, collectionId: moveCollectionId, request: { ...item.request, collectionId: moveCollectionId } } : item) }));
+        setWorkspace(current => ({ ...current, saved: current.saved.map(item => item.request.id === actionTarget.id ? { ...item, collectionId: moveCollectionId, folderId: item.collectionId === moveCollectionId ? item.folderId : undefined, request: { ...item.request, collectionId: moveCollectionId } } : item) }));
         setTabs(current => current.map(tab => tab.id === actionTarget.id ? { ...tab, collectionId: moveCollectionId } : tab));
         setModal(null); setToast('Request moved.');
       }}>Move request</button></div>

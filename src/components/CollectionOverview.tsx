@@ -14,6 +14,7 @@ export type CollectionSection = 'overview' | 'variables' | 'scripts' | 'auth';
 interface Props {
   collection: Collection;
   requests: Draft[];
+  folderName: (requestId: string) => string | undefined;
   globals: Entry[];
   section: CollectionSection;
   onSectionChange: (section: CollectionSection) => void;
@@ -26,7 +27,7 @@ interface Props {
   requestActions: (request: Draft) => MenuAction[];
 }
 
-export default function CollectionOverview({ collection, requests, globals, section, onSectionChange, onChange, onOpenRequest, onNewRequest, onGlobals, onRun, actions, requestActions }: Props) {
+export default function CollectionOverview({ collection, requests, folderName, globals, section, onSectionChange, onChange, onOpenRequest, onNewRequest, onGlobals, onRun, actions, requestActions }: Props) {
   const [search, setSearch] = useState('');
   const effective = useMemo(() => getVariableScope(globals, collection.variables), [globals, collection.variables]);
   const collectionCount = getVariableScope([], collection.variables).length;
@@ -58,7 +59,7 @@ export default function CollectionOverview({ collection, requests, globals, sect
         </section>
         <section className="collection-request-section">
           <div className="collection-section-title"><h2>Requests <span>{requests.length}</span></h2><label className="collection-request-search"><Icon name="search" size={15} /><input aria-label="Search collection requests" placeholder="Filter requests…" value={search} onChange={event => setSearch(event.target.value)} /></label></div>
-          {filtered.length ? <div className="overview-request-list">{filtered.map(request => <div className="overview-request-row" key={request.id}><button onClick={() => onOpenRequest(request)} title={request.url}><span className={`method-label method-${request.method.toLowerCase()}`}>{request.method}</span><strong>{request.name}</strong><code>{request.url || 'No URL yet'}</code><Icon name="arrow" size={15} /></button><ActionMenu label={`Options for request ${request.name}`} actions={requestActions(request)} /></div>)}</div> : <div className="collection-empty-state"><Icon name={search ? 'search' : 'file'} size={28} /><h3>{search ? 'No matching requests' : 'Make your first request'}</h3><p>{search ? 'Try a different name, method, or URL.' : 'Add a request to start exploring this API.'}</p>{!search && <button className="button button-secondary" onClick={onNewRequest}><Icon name="plus" size={15} /> New request</button>}</div>}
+          {filtered.length ? <div className="overview-request-list">{filtered.map(request => <div className="overview-request-row" key={request.id}><button onClick={() => onOpenRequest(request)} title={request.url}><span className={`method-label method-${request.method.toLowerCase()}`}>{request.method}</span><strong>{folderName(request.id) ? `${folderName(request.id)} / ${request.name}` : request.name}</strong><code>{request.url || 'No URL yet'}</code><Icon name="arrow" size={15} /></button><ActionMenu label={`Options for request ${request.name}`} actions={requestActions(request)} /></div>)}</div> : <div className="collection-empty-state"><Icon name={search ? 'search' : 'file'} size={28} /><h3>{search ? 'No matching requests' : 'Make your first request'}</h3><p>{search ? 'Try a different name, method, or URL.' : 'Add a request to start exploring this API.'}</p>{!search && <button className="button button-secondary" onClick={onNewRequest}><Icon name="plus" size={15} /> New request</button>}</div>}
         </section>
       </> : section === 'auth' ? <AuthEditor isCollection value={collection.auth || newAuthConfig()} variables={effective} onChange={changes => onChange({ auth: { ...(collection.auth || newAuthConfig()), ...changes } })} /> : section === 'scripts' ? <ScriptEditor collection value={collection} onChange={onChange} /> : <>
         <div className="collection-section-title"><div><h2>Collection variables</h2><p>Values specific to {collection.name}. Reference them with <code>{'{{variable}}'}</code> in requests.</p></div><span className="auto-save-label"><Icon name="check" size={14} />Saved automatically</span></div>

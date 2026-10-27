@@ -6,6 +6,7 @@ import type { RunReport, RunnerOptions } from '../../shared/automation';
 import { parseRunData } from '../../shared/data';
 import { planRun, runCollection } from '../../shared/runner';
 import type { Workspace } from '../lib/workspace';
+import { orderedSaved } from '../../shared/organization';
 import { readRequestFiles } from '../lib/attachments';
 import { executeAutomation } from '../lib/execution';
 import Dialog from './Dialog';
@@ -16,7 +17,7 @@ export default function CollectionRunner({ workspace, collectionId, onClose, onW
   workspace: Workspace; collectionId: string; onClose: () => void; onWorkspaceChange: (update: (workspace: Workspace) => Workspace) => void; onAuthenticationUpdate: (updates: AuthenticationUpdate[]) => void; onCookieUpdate: (cookies: CookieRecord[]) => void;
 }) {
   const collection = workspace.collections.find(item => item.id === collectionId)!;
-  const requests = workspace.saved.filter(item => item.collectionId === collectionId).map(item => item.request);
+  const requests = orderedSaved(workspace, collectionId).map(item => item.request);
   const [order, setOrder] = useState(requests.map(request => request.id));
   const [selected, setSelected] = useState(order);
   const [iterations, setIterations] = useState(1);
