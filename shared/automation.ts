@@ -15,10 +15,10 @@ export interface Assertion { id: string; enabled: boolean; name: string; source:
 export interface Extraction { id: string; enabled: boolean; name: string; source: ValueSource; path: string; variable: string; scope: VariableScope; required: boolean }
 export interface ScriptSettings { preRequestScript: string; postResponseScript: string }
 export interface RequestAutomation extends ScriptSettings { assertions: Assertion[]; extractions: Extraction[] }
-export interface CheckResult { name: string; passed: boolean; kind: 'script' | 'assertion' | 'extraction'; error?: string; phase?: string }
+export interface CheckResult { name: string; passed: boolean; kind: 'script' | 'assertion' | 'extraction' | 'schema'; error?: string; phase?: string }
 export interface ScriptLog { level: 'log' | 'warn' | 'error'; message: string; phase: string }
 export interface ExecutionInput { request: Draft; globals: Entry[]; collection?: Collection; data?: DataRow; files?: Record<string, string>; iteration?: number; cookies?: CookieRecord[] }
-export interface ExecutionResult { response?: HttpResponse; error?: string; tests: CheckResult[]; logs: ScriptLog[]; changes: VariableChange[]; passed: boolean; authUpdates?: AuthenticationUpdate[]; cookies?: CookieRecord[] }
+export interface ExecutionResult { mocked?: boolean; response?: HttpResponse; error?: string; tests: CheckResult[]; logs: ScriptLog[]; changes: VariableChange[]; passed: boolean; authUpdates?: AuthenticationUpdate[]; cookies?: CookieRecord[] }
 export interface RunnerOptions { iterations: number; delayMs: number; stopOnFailure: boolean; data: DataRow[]; requestIds?: string[] }
 export interface RunItem {
   requestId: string; name: string; method: string; url: string; iteration: number; dataIndex: number;

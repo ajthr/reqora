@@ -5,6 +5,7 @@ import type { Assertion, ExecutionInput, ExecutionResult, VariableChange } from 
 import { validateDataRows } from '../shared/data.ts';
 import { getVariableScope, interpolate, isDraft, parseWorkspace, prepareRequest } from '../shared/workspace.ts';
 import type { Collection, Draft, Entry } from '../shared/workspace.ts';
+import { matchingResponseSchema, validateJsonSchema } from '../shared/schema.ts';
 import { authConfigurationKey } from '../shared/auth.ts';
 import { isCookieJar, normalizedNetworkSettings } from '../shared/network.ts';
 
@@ -67,22 +68,61 @@ export async function runRequest(value: unknown, signal?: AbortSignal): Promise<
     if (output.error) throw new Error(`${phase}: ${output.error}`);
     if (!isDraft(output.request)) throw new Error(`${phase}: script produced an invalid request.`);
     // Scripts can edit outgoing request fields, but cannot rewrite their own saved checks/scripts.
-    request = { ...output.request, preRequestScript: request.preRequestScript, postResponseScript: request.postResponseScript, assertions: request.assertions, extractions: request.extractions };
+    request = { ...output.request, preRequestScript: request.preRequestScript, postResponseScript: request.postResponseScript, assertions: request.assertions, extractions: request.extractions, schema: request.schema, mock: request.mock };
     commit(output.changes);
   };
   try {
     signal?.throwIfAborted();
     await script(input.collection?.preRequestScript, 'Collection pre-request');
     await script(input.request.preRequestScript, 'Request pre-request');
-    const prepared = prepareRequest({ ...request, method: request.method.toUpperCase() }, state.variables, [...(state.collections[0]?.variables || []), ...rowEntries], new Map(Object.entries(input.files || {})), state.collections[0]?.auth);
-    if (normalizedNetworkSettings(request.network).useCookies) prepared.cookies = input.cookies;
-    const inherited = request.authType === 'inherit' && !!input.collection?.auth;
-    result.response = await executeRequest(prepared, signal, { onCookieUpdate: cookies => { result.cookies = cookies; }, onAuthUpdate: tokens => {
-      result.authUpdates = [{ scope: inherited ? 'collection' : 'request', id: inherited ? input.collection!.id : input.request.id,
-        configurationKey: authConfigurationKey(inherited ? input.collection!.auth : input.request), oauth2: tokens }];
-    } });
+    if (request.mock?.enabled) {
+      const mock = request.mock;
+      result.mocked = true;
+      const body = interpolate(mock.body, scope(), 100_000);
+      const headers = mock.headers.map(header => ({ name: header.name, value: interpolate(header.value, scope()) }));
+      if (!headers.some(header => header.name.toLowerCase() === 'content-type')) headers.push({ name: 'Content-Type', value: 'application/json' });
+      result.response = { url: request.url, status: mock.status, statusText: mock.statusText || 'Mock response', headers, body, encoding: 'utf8', durationMs: 0, size: new TextEncoder().encode(body).length };
+    } else {
+      const prepared = prepareRequest({ ...request, method: request.method.toUpperCase() }, state.variables, [...(state.collections[0]?.variables || []), ...rowEntries], new Map(Object.entries(input.files || {})), state.collections[0]?.auth);
+      if (request.schema?.enabled && (request.schema.requestSchema !== undefined || request.schema.requestRequired)) {
+        try {
+          if (typeof prepared.body !== 'string') throw new Error('Schema validation requires a JSON request body.');
+          const issues = request.schema.requestSchema === undefined ? [] : validateJsonSchema(JSON.parse(prepared.body), request.schema.requestSchema, state.collections[0]?.schemaDefinitions);
+          result.tests.push({ name: 'OpenAPI request schema', kind: 'schema', passed: issues.length === 0, ...(issues.length ? { error: `${issues[0].path}: ${issues[0].message}` } : {}) });
+          if (issues.length) { result.error = 'Request body does not match the OpenAPI schema.'; return result; }
+        } catch (error) { result.tests.push({ name: 'OpenAPI request schema', kind: 'schema', passed: false, error: (error as Error).message }); result.error = 'Request body could not be validated against the OpenAPI schema.'; return result; }
+      }
+      if (normalizedNetworkSettings(request.network).useCookies) prepared.cookies = input.cookies;
+      const inherited = request.authType === 'inherit' && !!input.collection?.auth;
+      result.response = await executeRequest(prepared, signal, { onCookieUpdate: cookies => { result.cookies = cookies; }, onAuthUpdate: tokens => {
+        result.authUpdates = [{ scope: inherited ? 'collection' : 'request', id: inherited ? input.collection!.id : input.request.id,
+          configurationKey: authConfigurationKey(inherited ? input.collection!.auth : input.request), oauth2: tokens }];
+      } });
+    }
     await script(input.collection?.postResponseScript, 'Collection post-response');
     await script(input.request.postResponseScript, 'Request post-response');
+    if (request.schema?.enabled) {
+      const settings = request.schema;
+      const manual = settings.manualResponse.trim();
+      const contentType = result.response.headers.find(header => header.name.toLowerCase() === 'content-type')?.value || '';
+      const selected = manual ? undefined : matchingResponseSchema(settings.responses || [], result.response.status, contentType);
+      if (!manual && !settings.responses?.length && settings.requestSchema === undefined) result.tests.push({ name: 'Response JSON schema', kind: 'schema', passed: false, error: 'Add a custom response schema or import an OpenAPI definition.' });
+      if (manual || settings.responses?.length) {
+        try {
+          if (!manual && !selected) throw new Error(`No OpenAPI response schema matches status ${result.response.status} and ${contentType || 'unknown content type'}.`);
+          if (selected && selected.schema === undefined) {
+            const passed = !result.response.body;
+            result.tests.push({ name: 'OpenAPI response schema', kind: 'schema', passed, ...(!passed ? { error: 'Expected an empty response body.' } : {}) });
+          } else {
+            if (result.response.encoding !== 'utf8') throw new Error('JSON schema cannot validate a binary response.');
+            const schema = manual ? JSON.parse(manual) : selected!.schema;
+            const body = JSON.parse(result.response.body);
+            const issues = validateJsonSchema(body, schema, manual ? undefined : state.collections[0]?.schemaDefinitions);
+            result.tests.push({ name: manual ? 'Response JSON schema' : 'OpenAPI response schema', kind: 'schema', passed: issues.length === 0, ...(issues.length ? { error: `${issues[0].path}: ${issues[0].message}${issues.length > 1 ? ` (${issues.length} issues)` : ''}` } : {}) });
+          }
+        } catch (error) { result.tests.push({ name: manual ? 'Response JSON schema' : 'OpenAPI response schema', kind: 'schema', passed: false, error: (error as Error).message }); }
+      }
+    }
     for (const assertion of input.request.assertions) {
       if (!assertion.enabled) continue;
       try {

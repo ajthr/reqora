@@ -67,6 +67,8 @@ function insomnia(data: Obj): Workspace {
 function openapi(data: Obj): Workspace {
   const workspace = blank(), root = collection(string(data.info?.title) || 'OpenAPI', string(data.info?.description)); workspace.collections.push(root);
   const server = string(rows(data.servers)[0]?.url);
+  const definitions = object(data.components?.schemas);
+  if (Object.keys(definitions).length) root.schemaDefinitions = definitions;
   for (const [path, pathValue] of Object.entries(object(data.paths))) for (const [method, operationValue] of Object.entries(object(pathValue))) {
     if (!['get', 'post', 'put', 'patch', 'delete', 'head', 'options'].includes(method)) continue;
     const operation = object(operationValue), parameters = [...rows(object(pathValue).parameters), ...rows(operation.parameters)];
@@ -74,6 +76,13 @@ function openapi(data: Obj): Workspace {
       headers: parameters.filter(row => row.in === 'header').map(row => newEntry(string(row.name), '')) };
     const content = object(operation.requestBody?.content), media = Object.keys(content)[0];
     if (media) { draft.bodyType = media.includes('json') ? 'json' : media.includes('xml') ? 'xml' : 'text'; draft.body = content[media]?.example === undefined ? '' : typeof content[media].example === 'string' ? content[media].example : JSON.stringify(content[media].example, null, 2); }
+    const requestMedia = Object.keys(content).find(type => type.includes('json'));
+    const responses = Object.entries(object(operation.responses)).flatMap(([status, response]) => {
+      const formats = object(object(response).content);
+      const json = Object.entries(formats).filter(([type]) => type.includes('json')).map(([type, value]) => ({ status, mediaType: type, schema: object(value).schema }));
+      return json.length ? json : !Object.keys(formats).length ? [{ status, mediaType: '' }] : [];
+    });
+    if (requestMedia || responses.length) draft.schema = { enabled: true, manualResponse: '', ...(requestMedia ? { requestSchema: object(content[requestMedia]).schema, requestRequired: !!operation.requestBody?.required } : {}), responses };
     workspace.saved.push({ collectionId: root.id, request: draft });
   }
   if (!workspace.saved.length) throw new Error('The OpenAPI document contains no supported HTTP operations.');

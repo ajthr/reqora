@@ -6,13 +6,19 @@ Execution order:
 
 1. Collection pre-request script.
 2. Request pre-request script.
-3. Resolve variables and send HTTP.
+3. Resolve variables and validate an imported OpenAPI request body, then send HTTP or produce a local mock response.
 4. Collection post-response script.
 5. Request post-response script.
-6. Declarative assertions.
+6. Response JSON schema validation, then declarative assertions.
 7. Response-to-variable extractions, in configured order.
 
 Pre-request scripts can create variables or edit the outgoing request before interpolation. Post-response scripts inspect the received response. Script request edits affect the current execution, not the saved request. HTTP 4xx/5xx remain inspectable responses; add a status assertion when they should fail a run.
+
+## API schema checks and mock responses
+
+The **Schema** tab accepts a custom response JSON schema. OpenAPI 3 JSON imports also attach request and response schemas to generated requests; local `#/components/schemas/...` references resolve against the imported collection. Enable schema validation to use them. An invalid outgoing JSON request body stops before HTTP; a response mismatch is reported as a failed schema check. A custom response schema takes precedence over imported response schemas. Unsupported schema keywords and external references fail explicitly.
+
+The **Mock** tab returns a local configured status, headers, and body without HTTP. The same pre/post scripts, assertions, schema checks, and extraction rules then run against that response in the UI or CLI. Mocks are not hosted as an endpoint.
 
 ## Scripts
 

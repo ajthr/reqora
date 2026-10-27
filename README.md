@@ -26,8 +26,8 @@ Reqora now has its first working REST workflow: a shared React and TypeScript wo
 - Named collections, one-level folders, saved requests, drag-and-drop/manual ordering, search, and the last 100 request attempts in local history.
 - Three-dot menus on requests and collections for renaming, duplication, export, and deletion; request menus also support moving between collections and copying cURL.
 - Shared in-app dialogs for editing and destructive actions, with keyboard focus containment, Escape dismissal, and focus restoration.
-- Reqora workspace JSON import/export; Postman collection/environment, Insomnia export, OpenAPI 3 JSON, and cURL command import; POSIX-shell cURL command generation.
-- Pre-request/post-response scripts at request and collection scope, response assertions, and response-to-variable extraction.
+- Reqora workspace JSON import/export; Postman collection/environment, Insomnia export, OpenAPI 3 JSON with request/response schemas, and cURL command import; POSIX-shell cURL command generation.
+- Pre-request/post-response scripts at request and collection scope, response assertions, response-to-variable extraction, JSON schema checks, and local mock responses.
 - A sequential collection runner following saved root/folder request order, with JSON/CSV datasets, iterations, delay, cancellation, and optional variable persistence.
 - A CLI runner with JSON/JUnit reports and CI exit codes, using the same pipeline as the UI.
 - `Ctrl/Cmd + Enter` to send and `Ctrl/Cmd + S` to save.
@@ -53,6 +53,14 @@ Close collection and request tabs to return to the startup page. Closing an over
 Collections, saved request credentials, cookies, history, and environment values are stored in local browser storage without encryption. Workspace exports include those values. Multiple named workspaces are stored locally; use the Workspaces button to create, rename, switch, or delete them. New workspaces start empty. Web and desktop maintain separate data; use export/import to move a workspace between them. Save requests you want to keep before closing their tabs.
 
 To import, open **Import**, drag a Reqora, Postman, Insomnia, or OpenAPI JSON export into the dialog, or paste JSON or a cURL command. Review the detected format and counts before confirming. Postman environment imports add a named environment to the current workspace and make it active. Request and collection exports use the same workspace format and include environment values so variable references remain usable. Collection imports replace the active workspace after confirmation; they do not merge into it. Postman and Insomnia folder paths are preserved as one-level folder labels. External formats are converted to Reqora’s supported REST fields; advanced scripts, file attachments, and unsupported authentication settings are not imported. OpenAPI YAML must be converted to JSON first. cURL import accepts common method, header, body, URL, Basic auth, redirect, and timeout options and reports unsupported options.
+
+### API schemas and mocks
+
+Open a request's **Schema** tab to enable JSON validation. Paste a custom response JSON schema, or import an OpenAPI 3 JSON document to attach its operation request and response schemas. Request body mismatches stop the HTTP call; response mismatches appear as failed checks in **Tests**, collection runs, and CLI reports. Imported schemas resolve local `#/components/schemas/...` references. Custom response schemas take priority over imported response definitions.
+
+Use **Mock** to return a configured status, headers, and body without contacting the URL. Mock sends still run scripts, response checks, schema validation, and variable extraction. A MOCK badge identifies their results. Mocks are request-local and are included in workspace exports; they do not expose a separate mock server endpoint.
+
+Schema validation supports types, required/properties/items, additional properties, enum/const, length/item/property/number bounds, multipleOf, allOf/anyOf/oneOf, common string formats, and local references. Unsupported keywords and external references fail the check explicitly. Manual schemas and mock bodies are size-limited in the editor.
 
 ### Request bodies
 

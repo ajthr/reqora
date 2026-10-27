@@ -5,6 +5,8 @@ import type { CookieRecord, NetworkSettings } from './network.ts';
 import type { HttpRequest, HttpResponse, MultipartPart, UploadFile } from './types.ts';
 import { emptyAutomation, isAutomation, isScriptSettings } from './automation.ts';
 import type { RequestAutomation, ScriptSettings } from './automation.ts';
+import { isMockSettings, isSchemaSettings } from './schema.ts';
+import type { MockSettings, SchemaSettings } from './schema.ts';
 import { isFileName, isMediaType, MAX_BODY_BYTES, MAX_BODY_FIELDS } from './body.ts';
 
 export interface Entry { id: string; enabled: boolean; name: string; value: string }
@@ -30,11 +32,13 @@ export interface Draft extends RequestAutomation, AuthConfig {
   timeoutMs: number;
   followRedirects: boolean;
   network: NetworkSettings;
+  schema?: SchemaSettings;
+  mock?: MockSettings;
 }
 export interface ResponseExample { id: string; name: string; status: number; statusText: string; headers: { name: string; value: string }[]; body: string; encoding: 'utf8' | 'base64'; truncated?: boolean }
 export interface Folder { id: string; name: string }
 export interface SavedRequest { collectionId: string; folderId?: string; examples?: ResponseExample[]; request: Draft }
-export interface Collection extends Partial<ScriptSettings> { id: string; name: string; description: string; variables: Entry[]; folders?: Folder[]; auth?: AuthConfig }
+export interface Collection extends Partial<ScriptSettings> { id: string; name: string; description: string; variables: Entry[]; folders?: Folder[]; schemaDefinitions?: Record<string, unknown>; auth?: AuthConfig }
 export interface HistoryItem { id: string; date: string; request: Draft; status?: number; durationMs?: number; error?: string }
 export interface Environment { id: string; name: string; variables: Entry[] }
 export interface Workspace { version: 1; environments?: Environment[]; activeEnvironmentId?: string; collections: Collection[]; saved: SavedRequest[]; history: HistoryItem[]; variables: Entry[]; cookies: CookieRecord[] }
@@ -241,7 +245,7 @@ export function isDraft(value: unknown): value is Draft {
     && (draft.formFields === undefined || Array.isArray(draft.formFields) && draft.formFields.every(isEntry))
     && (draft.multipartFields === undefined || Array.isArray(draft.multipartFields) && draft.multipartFields.every(isMultipartField))
     && (draft.binaryFile === undefined || isFileReference(draft.binaryFile))
-    && isAutomation(draft)
+    && isAutomation(draft) && (draft.schema === undefined || isSchemaSettings(draft.schema)) && (draft.mock === undefined || isMockSettings(draft.mock))
     && (draft.collectionId === undefined || typeof draft.collectionId === 'string')
     && typeof draft.timeoutMs === 'number' && typeof draft.followRedirects === 'boolean';
 }
@@ -249,7 +253,7 @@ export function isDraft(value: unknown): value is Draft {
 export function parseWorkspace(text: string): Workspace {
   const data = JSON.parse(text) as Workspace;
   if (data?.version !== 1 || !Array.isArray(data.collections) || !data.collections.every(item => typeof item?.id === 'string' && typeof item?.name === 'string' && isScriptSettings(item) && (item.auth === undefined || isAuthConfig(item.auth, false))
-      && (item.description === undefined || typeof item.description === 'string') && (item.folders === undefined || Array.isArray(item.folders) && item.folders.every(folder => typeof folder?.id === 'string' && typeof folder?.name === 'string')) && (item.variables === undefined || Array.isArray(item.variables) && item.variables.every(isEntry)))
+      && (item.description === undefined || typeof item.description === 'string') && (item.folders === undefined || Array.isArray(item.folders) && item.folders.every(folder => typeof folder?.id === 'string' && typeof folder?.name === 'string')) && (item.schemaDefinitions === undefined || !!item.schemaDefinitions && typeof item.schemaDefinitions === 'object' && !Array.isArray(item.schemaDefinitions) && JSON.stringify(item.schemaDefinitions).length <= 500_000) && (item.variables === undefined || Array.isArray(item.variables) && item.variables.every(isEntry)))
     || !Array.isArray(data.saved) || !data.saved.every(item => typeof item?.collectionId === 'string' && data.collections.some(collection => collection.id === item.collectionId) && isDraft(item?.request) && (item.folderId === undefined || typeof item.folderId === 'string' && data.collections.find(collection => collection.id === item.collectionId)?.folders?.some(folder => folder.id === item.folderId)) && (item.examples === undefined || Array.isArray(item.examples) && item.examples.length <= 30 && item.examples.every(example => typeof example?.id === 'string' && typeof example?.name === 'string' && typeof example?.status === 'number' && typeof example?.statusText === 'string' && Array.isArray(example?.headers) && example.headers.every(header => typeof header?.name === 'string' && typeof header?.value === 'string') && typeof example?.body === 'string' && example.body.length <= 150_000 && (example.truncated === undefined || typeof example.truncated === 'boolean') && ['utf8', 'base64'].includes(example?.encoding))))
     || !Array.isArray(data.variables) || !data.variables.every(isEntry) || (data.environments !== undefined && (!Array.isArray(data.environments) || !data.environments.every(item => typeof item?.id === 'string' && typeof item?.name === 'string' && Array.isArray(item?.variables) && item.variables.every(isEntry)))) || (data.activeEnvironmentId !== undefined && typeof data.activeEnvironmentId !== 'string') || (data.cookies !== undefined && !isCookieJar(data.cookies))
     || !Array.isArray(data.history) || !data.history.every(item => typeof item?.id === 'string' && typeof item?.date === 'string' && isDraft(item?.request)
