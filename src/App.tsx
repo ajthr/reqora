@@ -2,7 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import logo from '../assets/logo-full.png';
 import Icon from './components/Icon';
 import KeyValueEditor from './components/KeyValueEditor';
-import CodeView from './components/CodeView';
+import ResponseInspector from './components/ResponseInspector';
+import type { ResponseView } from './components/ResponseInspector';
+import { responseCookies } from './components/ResponseInspector';
+import { importWorkspace } from './lib/importers';
 import BodyEditor from './components/BodyEditor';
 import { readRequestFiles } from './lib/attachments';
 import { applyVariableChanges } from '../shared/automation';
@@ -25,20 +28,16 @@ import type { MenuAction } from './components/ActionMenu';
 import Startup from './components/Startup';
 import CollectionOverview from './components/CollectionOverview';
 import type { CollectionSection } from './components/CollectionOverview';
-import { closeRequestTab, formatBody, formatSize, getRequestCollection, getVariableScope, initialWorkspace, newDraft, parseWorkspace } from './lib/workspace';
+import { closeRequestTab, formatSize, getRequestCollection, getVariableScope, newDraft } from './lib/workspace';
 import type { Collection, Draft, Workspace } from './lib/workspace';
+import { emptyWorkspace, loadWorkspaceStore, STORE_KEY } from './lib/workspace-store';
+import type { WorkspaceRecord } from './lib/workspace-store';
+import { activeEnvironment, workspaceGlobals } from './lib/workspace';
 import { brandingInteractionProps } from './lib/branding';
 
-const STORAGE_KEY = 'reqora.workspace.v1';
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 type Result = Partial<ExecutionResult>;
 type EditorTab = 'Params' | 'Headers' | 'Body' | 'Auth' | 'Scripts' | 'Tests' | 'Settings';
-
-function loadWorkspace(): Workspace {
-  try { const value = localStorage.getItem(STORAGE_KEY); if (value) return parseWorkspace(value); }
-  catch { /* An unavailable local store must not prevent startup. */ }
-  return initialWorkspace();
-}
 
 function download(name: string, content: BlobPart, type: string) {
   const url = URL.createObjectURL(new Blob([content], { type }));
@@ -50,7 +49,12 @@ function download(name: string, content: BlobPart, type: string) {
 }
 
 export default function App() {
-  const [workspace, setWorkspace] = useState(loadWorkspace);
+  const [workspaceStore, setWorkspaceStore] = useState(() => loadWorkspaceStore(localStorage));
+  const workspace = workspaceStore.workspaces.find(item => item.id === workspaceStore.activeId)!.data;
+  const workspaceName = workspaceStore.workspaces.find(item => item.id === workspaceStore.activeId)!.name;
+  function setWorkspace(update: Workspace | ((current: Workspace) => Workspace)) {
+    setWorkspaceStore(current => ({ ...current, workspaces: current.workspaces.map(item => item.id === current.activeId ? { ...item, data: typeof update === 'function' ? update(item.data) : update } : item) }));
+  }
   const [tabs, setTabs] = useState<Draft[]>([]);
   const [activeId, setActiveId] = useState('');
   const [collectionTabs, setCollectionTabs] = useState<string[]>([]);
@@ -59,14 +63,16 @@ export default function App() {
   const [emptyDraft] = useState(newDraft);
   const [editorTab, setEditorTab] = useState<EditorTab>('Params');
   const [curl, setCurl] = useState('');
-  const [responseTab, setResponseTab] = useState<'Body' | 'Headers' | 'Tests'>('Body');
+  const [responseTab, setResponseTab] = useState<ResponseView>('Body');
   const [pretty, setPretty] = useState(true);
+  const [responseSearch, setResponseSearch] = useState('');
+  const [importFormat, setImportFormat] = useState('Reqora');
   const [results, setResults] = useState<Record<string, Result>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [sidebarTab, setSidebarTab] = useState<'collections' | 'history'>('collections');
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState<string[]>([]);
-  const [modal, setModal] = useState<'save' | 'collection' | 'environment' | 'cookies' | 'curl' | 'import' | 'rename' | 'move' | 'shortcuts' | 'about' | 'engine' | null>(null);
+  const [modal, setModal] = useState<'workspaces' | 'save' | 'collection' | 'environment' | 'cookies' | 'curl' | 'import' | 'rename' | 'move' | 'shortcuts' | 'about' | 'engine' | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [importText, setImportText] = useState('');
   const [runnerCollectionId, setRunnerCollectionId] = useState<string | null>(null);
@@ -79,6 +85,8 @@ export default function App() {
   const [saveName, setSaveName] = useState('');
   const [collectionId, setCollectionId] = useState(workspace.collections[0]?.id || '');
   const [collectionName, setCollectionName] = useState('');
+  const [workspaceDraftName, setWorkspaceDraftName] = useState('');
+  const [environmentDraftName, setEnvironmentDraftName] = useState('');
   const [toast, setToast] = useState('');
   const [storageError, setStorageError] = useState(false);
   const [backend, setBackend] = useState<'checking' | 'online' | 'offline'>('checking');
@@ -97,13 +105,13 @@ export default function App() {
   const dirty = !saved || JSON.stringify(saved.request) !== JSON.stringify(draft);
   const collection = getRequestCollection(workspace, draft);
   const scopeCollection = activeOverview || collection;
-  const effectiveVariables = getVariableScope(workspace.variables, scopeCollection?.variables);
+  const effectiveVariables = getVariableScope(workspaceGlobals(workspace), scopeCollection?.variables);
   const count = (rows: Draft['params']) => rows.filter(row => row.enabled && row.name.trim()).length;
 
   useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(workspace)); setStorageError(false); }
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(workspaceStore)); setStorageError(false); }
     catch { setStorageError(true); }
-  }, [workspace]);
+  }, [workspaceStore]);
   useEffect(() => {
     const valid = new Set(workspace.collections.map(item => item.id));
     setCollectionTabs(current => current.every(id => valid.has(id)) ? current : current.filter(id => valid.has(id)));
@@ -222,7 +230,7 @@ export default function App() {
     const history = { id: crypto.randomUUID(), date: new Date().toISOString(), request: snapshot };
     try {
       const files = Object.fromEntries(await readRequestFiles(snapshot, abort.signal));
-      const outcome = await executeAutomation({ request: snapshot, globals: workspace.variables, collection, files, cookies: workspace.cookies }, abort.signal);
+      const outcome = await executeAutomation({ request: snapshot, globals: workspaceGlobals(workspace), collection, files, cookies: workspace.cookies }, abort.signal);
       setResults(current => ({ ...current, [id]: outcome }));
       setWorkspace(current => ({ ...applyAuthenticationUpdates(applyVariableChanges(current, outcome.changes, collection?.id), outcome.authUpdates), ...(outcome.cookies ? { cookies: outcome.cookies } : {}), history: [{ ...history, status: outcome.response?.status, durationMs: outcome.response?.durationMs, error: outcome.error }, ...current.history].slice(0, 100) }));
       updateTabAuthentication(outcome.authUpdates || []);
@@ -242,16 +250,18 @@ export default function App() {
 
   function reviewImport(text: string) {
     try {
-      if (new TextEncoder().encode(text).length > 5 * 1024 * 1024) throw new Error('Workspace imports must be smaller than 5 MB.');
+      if (new TextEncoder().encode(text).length > 5 * 1024 * 1024) throw new Error('Imports must be smaller than 5 MB.');
       if (!text.trim()) throw new Error('Drop a workspace file or paste its JSON to continue.');
-      setPendingImport(parseWorkspace(text));
+      const imported = importWorkspace(text, workspace);
+      setPendingImport(imported.workspace);
+      setImportFormat(imported.format);
       setDialogError('');
-    } catch (error) { setDialogError(error instanceof SyntaxError ? 'This JSON is invalid. Paste a complete Reqora workspace export.' : error instanceof Error ? error.message : 'Unable to import this workspace.'); }
+    } catch (error) { setDialogError(error instanceof SyntaxError ? 'This JSON is invalid. Paste a supported JSON export or cURL command.' : error instanceof Error ? error.message : 'Unable to import this workspace.'); }
   }
 
   async function readImportFile(file: File) {
     try {
-      if (file.size > 5 * 1024 * 1024) throw new Error('Workspace imports must be smaller than 5 MB.');
+      if (file.size > 5 * 1024 * 1024) throw new Error('Imports must be smaller than 5 MB.');
       const text = await file.text();
       setImportText(text);
       reviewImport(text);
@@ -286,7 +296,7 @@ export default function App() {
     const selected = workspace.saved.filter(item => item.collectionId === collection.id && (!requestId || item.request.id === requestId));
     const name = requestId ? selected[0]?.request.name || 'request' : collection.name;
     const filename = name.replace(/[^\p{L}\p{N}_-]+/gu, '-').slice(0, 80) || 'export';
-    download(`reqora-${filename}.json`, JSON.stringify({ version: 1, collections: [collection], saved: selected, history: [], variables: workspace.variables, cookies: workspace.cookies }, null, 2), 'application/json');
+    download(`reqora-${filename}.json`, JSON.stringify({ version: 1, collections: [collection], saved: selected, history: [], variables: workspace.variables, environments: workspace.environments, activeEnvironmentId: workspace.activeEnvironmentId, cookies: workspace.cookies }, null, 2), 'application/json');
     setToast(`${requestId ? 'Request' : 'Collection'} exported in Reqora format.`);
   }
 
@@ -345,6 +355,51 @@ export default function App() {
     setImportText(''); setPendingImport(null); setModal('import'); setMobileSidebar(false);
   }
 
+  function changeWorkspace(id: string) {
+    if (id === workspaceStore.activeId) { setModal(null); return; }
+    if (busyId || runnerCollectionId) { setToast('Finish or cancel the current run before switching workspaces.'); return; }
+    const switchNow = () => {
+      setWorkspaceStore(current => ({ ...current, activeId: id }));
+      setTabs([]); setActiveId(''); setCollectionTabs([]); setActiveCollectionId(null); setResults({});
+      setModal(null); setMobileSidebar(false);
+    };
+    const unsaved = tabs.some(tab => {
+      const original = workspace.saved.find(item => item.request.id === tab.id)?.request;
+      return (!original || JSON.stringify(original) !== JSON.stringify(tab)) && (tab.url || tab.body || tab.name !== 'Untitled request' || tab.headers.length || tab.params.length);
+    });
+    if (unsaved) setConfirmation({ title: 'Switch workspace?', description: 'Unsaved request tab changes will be discarded. Saved requests stay in this workspace.', confirmLabel: 'Discard and switch', onConfirm: switchNow });
+    else switchNow();
+  }
+
+  function createWorkspace() {
+    const name = workspaceDraftName.trim();
+    if (workspaceStore.workspaces.length >= 100) { setDialogError('You can keep up to 100 local workspaces.'); return; }
+    if (!name) { setDialogError('Enter a workspace name.'); return; }
+    const item: WorkspaceRecord = { id: crypto.randomUUID(), name, data: emptyWorkspace() };
+    const createNow = () => {
+      setWorkspaceStore(current => ({ ...current, workspaces: [...current.workspaces, item], activeId: item.id }));
+      setTabs([]); setActiveId(''); setCollectionTabs([]); setActiveCollectionId(null); setResults({});
+      setWorkspaceDraftName(''); setModal(null);
+    };
+    const unsaved = tabs.some(tab => {
+      const original = workspace.saved.find(saved => saved.request.id === tab.id)?.request;
+      return (!original || JSON.stringify(original) !== JSON.stringify(tab)) && (tab.url || tab.body || tab.name !== 'Untitled request' || tab.headers.length || tab.params.length);
+    });
+    if (unsaved) setConfirmation({ title: 'Create workspace?', description: 'Unsaved request tab changes will be discarded.', confirmLabel: 'Discard and create', onConfirm: createNow });
+    else createNow();
+  }
+
+  function deleteWorkspace(id: string) {
+    if (workspaceStore.workspaces.length < 2) return;
+    const item = workspaceStore.workspaces.find(item => item.id === id);
+    if (!item) return;
+    setConfirmation({ title: 'Delete workspace?', description: `“${item.name}” and all its saved collections, variables, history, cookies, and unsaved open tabs will be removed. Export it first if you need a backup.`, confirmLabel: 'Delete workspace', onConfirm: () => {
+      if (id === workspaceStore.activeId) { setTabs([]); setActiveId(''); setCollectionTabs([]); setActiveCollectionId(null); setResults({}); }
+      setWorkspaceStore(current => { const workspaces = current.workspaces.filter(record => record.id !== id); return { ...current, workspaces, activeId: current.activeId === id ? workspaces[0].id : current.activeId }; });
+      setModal(null);
+    } });
+  }
+
   function exportWorkspace() {
     download('reqora-workspace.json', JSON.stringify(workspace, null, 2), 'application/json');
     setToast('Workspace exported. Keep it private if it contains credentials.');
@@ -366,6 +421,7 @@ export default function App() {
   const applicationMenus: { label: string; actions: MenuAction[] }[] = [
     { label: 'File', actions: [
       { label: 'New request', icon: 'plus', onSelect: addRequest },
+      { label: 'Manage workspaces', icon: 'layers', onSelect: () => setModal('workspaces') },
       { label: 'New collection', icon: 'folder', onSelect: () => { setCollectionName(''); setModal('collection'); } },
       { label: 'Import workspace', icon: 'upload', onSelect: openImport, separator: true },
       { label: 'Export workspace', icon: 'download', onSelect: exportWorkspace },
@@ -377,7 +433,7 @@ export default function App() {
       { label: sidebarHidden ? 'Show sidebar' : 'Hide sidebar', icon: 'menu', onSelect: () => { setSidebarHidden(!sidebarHidden); setMobileSidebar(false); } },
       { label: 'Light theme', icon: theme === 'light' ? 'check' : 'sun', onSelect: () => setTheme('light'), separator: true },
       { label: 'Dark theme', icon: theme === 'dark' ? 'check' : 'moon', onSelect: () => setTheme('dark') },
-      { label: 'Global environment variables', icon: 'globe', onSelect: () => setModal('environment'), separator: true },
+      { label: 'Environments', icon: 'globe', onSelect: () => setModal('environment'), separator: true },
       { label: 'Cookie jar', icon: 'layers', onSelect: () => setModal('cookies') },
       { label: 'Collection variables', icon: 'folder', disabled: !activeOverview && !collection, onSelect: () => openCollection((activeOverview || collection)!.id, 'variables') },
     ] },
@@ -454,7 +510,7 @@ export default function App() {
       <header className="topbar app-topbar">
         <button className="icon-button mobile-menu" aria-label="Open sidebar" onClick={() => { setSidebarHidden(false); setMobileSidebar(true); }}><Icon name="menu" /></button>
         <nav className="app-menu-bar" aria-label="Application menu" data-app-menu-bar>{applicationMenus.map(menu => <ActionMenu key={menu.label} label={`${menu.label} menu`} triggerLabel={menu.label} actions={menu.actions} />)}</nav>
-        <div className="topbar-actions"><span className="local-badge"><span className="status-dot" /> Local workspace</span><button className="environment-button" onClick={() => setModal('cookies')} title="Edit cookie jar"><Icon name="layers" size={16} /><span>Cookies</span><span className="environment-count">{workspace.cookies.length}</span></button><button className="environment-button" onClick={() => setModal('environment')} title="Edit global environment variables"><Icon name="globe" size={17} /><span>Global variables</span><span className="environment-count">{getVariableScope(workspace.variables).length}</span></button></div>
+        <div className="topbar-actions"><span className="local-badge"><span className="status-dot" /> {workspaceName}</span><button className="environment-button" onClick={() => setModal('workspaces')} title="Switch workspace"><Icon name="layers" size={16} /><span>Workspaces</span></button><button className="environment-button" onClick={() => setModal('cookies')} title="Edit cookie jar"><Icon name="layers" size={16} /><span>Cookies</span><span className="environment-count">{workspace.cookies.length}</span></button><button className="environment-button" onClick={() => setModal('environment')} title="Manage environments"><Icon name="globe" size={17} /><span>{activeEnvironment(workspace)?.name || 'Base variables'}</span><span className="environment-count">{getVariableScope(workspaceGlobals(workspace)).length}</span></button></div>
       </header>
       {hasOpenTabs && <div className="request-tabs" role="tablist" aria-label="Open workspace tabs">
         {openCollections.map(item => <div className={`request-tab collection-workspace-tab ${activeOverview?.id === item.id ? 'active' : ''}`} key={`collection:${item.id}`}><button role="tab" aria-selected={activeOverview?.id === item.id} onClick={() => openCollection(item.id)}><Icon name="folder" size={14} /><span>{item.name}</span></button><button className="tab-close" aria-label={`Close collection ${item.name}`} onClick={() => closeCollectionTab(item.id)}><Icon name="close" size={12} /></button></div>)}
@@ -462,7 +518,7 @@ export default function App() {
         <button className="icon-button new-tab" aria-label="New request" title="New request" onClick={addRequest}><Icon name="plus" size={18} /></button>
       </div>}
 
-      {activeOverview ? <CollectionOverview key={activeOverview.id} collection={activeOverview} requests={workspace.saved.filter(item => item.collectionId === activeOverview.id).map(item => item.request)} globals={workspace.variables} section={collectionSection} onSectionChange={setCollectionSection} onChange={changes => setWorkspace(current => ({ ...current, collections: current.collections.map(item => item.id === activeOverview.id ? { ...item, ...changes } : item) }))} onOpenRequest={openRequest} onNewRequest={() => createCollectionRequest(activeOverview.id)} onGlobals={() => setModal('environment')} onRun={() => { if (busyId) setToast('Cancel the current request before running a collection.'); else setRunnerCollectionId(activeOverview.id); }} actions={collectionActions(activeOverview)} requestActions={request => requestActions(request, activeOverview)} /> : hasRequest ? <div className="request-workspace">
+      {activeOverview ? <CollectionOverview key={activeOverview.id} collection={activeOverview} requests={workspace.saved.filter(item => item.collectionId === activeOverview.id).map(item => item.request)} globals={workspaceGlobals(workspace)} section={collectionSection} onSectionChange={setCollectionSection} onChange={changes => setWorkspace(current => ({ ...current, collections: current.collections.map(item => item.id === activeOverview.id ? { ...item, ...changes } : item) }))} onOpenRequest={openRequest} onNewRequest={() => createCollectionRequest(activeOverview.id)} onGlobals={() => setModal('environment')} onRun={() => { if (busyId) setToast('Cancel the current request before running a collection.'); else setRunnerCollectionId(activeOverview.id); }} actions={collectionActions(activeOverview)} requestActions={request => requestActions(request, activeOverview)} /> : hasRequest ? <div className="request-workspace">
         <div className="request-heading"><div className="request-location"><Icon name="folder" size={16} /><button className="request-collection-link" disabled={!collection} onClick={() => collection && openCollection(collection.id)}>{collection?.name || 'Scratchpad'}</button><Icon name="chevron" size={12} /><input aria-label="Request name" value={draft.name} onChange={event => updateDraft({ name: event.target.value })} /></div><div className="request-actions"><button className="text-button code-button" title="Generate cURL command" onClick={() => setModal('curl')}><Icon name="code" size={16} /> Code</button><button className="button button-secondary save-button" onClick={saveRequest}><Icon name="save" size={15} /> Save{dirty && <span className="unsaved-dot" />}</button></div></div>
         <form className="url-bar" onSubmit={event => { event.preventDefault(); void sendRequest(); }}>
           <div className="url-input-group"><select className={`method-select method-${draft.method.toLowerCase()}`} aria-label="HTTP method" value={draft.method} onChange={event => updateDraft({ method: event.target.value })}>{METHODS.map(method => <option key={method}>{method}</option>)}</select><div className="url-divider" /><input className="url-input" aria-label="Request URL" placeholder="Enter a URL or paste an endpoint" value={draft.url} onChange={event => updateDraft({ url: event.target.value })} spellCheck={false} autoComplete="off" /><span className="url-protocol"><Icon name="lock" size={14} /></span></div>
@@ -487,8 +543,8 @@ export default function App() {
 
         <section className="response-panel" aria-label="Response"><div className="response-heading"><div className="response-title"><Icon name="terminal" size={17} /><strong>Response</strong>{response && <span className={`response-status ${response.status < 400 ? 'status-success' : 'status-error'}`}>{response.status} {response.statusText}</span>}</div>{response ? <div className="response-metrics"><span><Icon name="history" size={13} />{response.durationMs} <small>ms</small></span><span><Icon name="file" size={13} />{formatSize(response.size)}</span><button className="icon-button" title="Download response" aria-label="Download response" onClick={downloadResponse}><Icon name="download" size={16} /></button></div> : <span className="response-placeholder-label">{busyId === draft.id ? 'REQUEST IN PROGRESS' : 'READY WHEN YOU ARE'}</span>}</div>
           {busyId === draft.id ? <div className="response-empty" role="status"><div className="sending-orbit"><Icon name="send" size={28} /></div><h2>On its way.</h2><p>Waiting for your server to respond…</p><button className="text-button" onClick={() => controller.current?.abort()}>Cancel request</button></div> : result?.error && !response ? <div className="response-empty error-state" role="alert"><div className="empty-illustration"><Icon name="alert" size={28} /></div><h2>{result.error === 'Request cancelled.' ? 'Request cancelled' : 'Something needs a second look'}</h2><p>{result.error}</p><button className="button button-secondary" onClick={() => void sendRequest()}><Icon name="send" size={14} /> Try again</button></div> : response ? <>
-            <div className="response-toolbar"><nav aria-label="Response view"><button className={responseTab === 'Body' ? 'active' : ''} onClick={() => setResponseTab('Body')}>Body</button><button className={responseTab === 'Headers' ? 'active' : ''} onClick={() => setResponseTab('Headers')}>Headers <span>{response.headers.length}</span></button><button className={responseTab === 'Tests' ? 'active' : ''} onClick={() => setResponseTab('Tests')}>Tests <span>{result?.tests?.length || 0}</span></button></nav><div className="response-view-actions">{responseTab === 'Body' && response.encoding === 'utf8' && <div className="segmented-control"><button className={pretty ? 'active' : ''} onClick={() => setPretty(true)}>Pretty</button><button className={!pretty ? 'active' : ''} onClick={() => setPretty(false)}>Raw</button></div>}<button className="icon-button" title="Copy response" aria-label="Copy response" onClick={() => void copy(responseTab === 'Tests' ? JSON.stringify({ tests: result?.tests, logs: result?.logs, error: result?.error }, null, 2) : responseTab === 'Headers' ? response.headers.map(header => `${header.name}: ${header.value}`).join('\n') : formatBody(response, pretty))}><Icon name="copy" size={15} /></button></div></div>
-            <div className="response-content">{responseTab === 'Tests' ? <AutomationResults tests={result?.tests} logs={result?.logs} error={result?.error} /> : responseTab === 'Headers' ? <div className="response-headers">{response.headers.map((header, index) => <div key={index}><span>{header.name}</span><span>{header.value}</span></div>)}</div> : response.encoding === 'base64' ? <div className="response-empty"><Icon name="file" size={32} /><h2>Binary response</h2><p>{formatSize(response.size)} received. Download the response to open it.</p><button className="button button-secondary" onClick={downloadResponse}><Icon name="download" size={15} /> Download</button></div> : !response.body ? <div className="response-empty"><Icon name="check" size={28} /><h2>Request complete</h2><p>The server returned an empty response body.</p></div> : <CodeView text={formatBody(response, pretty)} highlight={pretty && response.headers.some(header => header.name.toLowerCase() === 'content-type' && header.value.includes('json'))} />}</div>
+            <div className="response-toolbar"><nav aria-label="Response view">{(['Body', 'Preview', 'Headers', 'Cookies', 'Details', 'Tests'] as ResponseView[]).map(view => <button key={view} className={responseTab === view ? 'active' : ''} onClick={() => setResponseTab(view)}>{view}{view === 'Headers' ? ` ${response.headers.length}` : view === 'Cookies' ? ` ${responseCookies(response).length}` : view === 'Tests' ? ` ${result?.tests?.length || 0}` : ''}</button>)}</nav><div className="response-view-actions">{responseTab === 'Body' && response.encoding === 'utf8' && <><input className="response-search" aria-label="Search response body" placeholder="Find in body" value={responseSearch} onChange={event => setResponseSearch(event.target.value)} /><div className="segmented-control"><button className={pretty ? 'active' : ''} onClick={() => setPretty(true)}>Pretty</button><button className={!pretty ? 'active' : ''} onClick={() => setPretty(false)}>Raw</button></div></>}<button className="icon-button" title="Copy response view" aria-label="Copy response view" onClick={() => void copy(responseTab === 'Tests' ? JSON.stringify({ tests: result?.tests, logs: result?.logs, error: result?.error }, null, 2) : responseTab === 'Headers' ? response.headers.map(header => `${header.name}: ${header.value}`).join('\n') : responseTab === 'Cookies' ? responseCookies(response).join('\n') : responseTab === 'Details' ? `${draft.method} ${draft.url}\n${response.status} ${response.statusText}\n${response.url}\n${response.durationMs} ms` : response.body)}><Icon name="copy" size={15} /></button></div></div>
+            <div className="response-content">{responseTab === 'Tests' ? <AutomationResults tests={result?.tests} logs={result?.logs} error={result?.error} /> : <ResponseInspector response={response} view={responseTab} pretty={pretty} search={responseSearch} requestMethod={draft.method} requestUrl={draft.url} onDownload={downloadResponse} />}</div>
             <div className="response-url" title={response.url}><Icon name="globe" size={11} />{response.url}</div>
           </> : <div className="response-empty"><div className="empty-art"><div className="empty-art-orbit orbit-one" /><div className="empty-art-orbit orbit-two" /><div className="empty-illustration"><Icon name="send" size={28} /></div><span className="art-spark spark-one" /><span className="art-spark spark-two" /></div><h2>A little curiosity. A new request.</h2><p>Enter an endpoint, make it yours, and hit Send.<br />Your response will land right here.</p><div className="shortcut-hint"><kbd>Ctrl</kbd><span>+</span><kbd>Enter</kbd><span>to send a request</span></div></div>}
         </section>
@@ -501,6 +557,13 @@ export default function App() {
 
     {runnerCollectionId && <CollectionRunner workspace={workspace} collectionId={runnerCollectionId} onClose={() => setRunnerCollectionId(null)} onWorkspaceChange={setWorkspace} onAuthenticationUpdate={updates => { setWorkspace(current => applyAuthenticationUpdates(current, updates)); updateTabAuthentication(updates); }} onCookieUpdate={cookies => setWorkspace(current => ({ ...current, cookies }))} />}
     {toast && <div className="toast" role="status"><Icon name="check" size={17} /><span>{toast}</span><button className="icon-button" aria-label="Dismiss notification" onClick={() => setToast('')}><Icon name="close" size={14} /></button></div>}
+    {modal === 'workspaces' && <Modal title="Workspaces" wide onClose={() => setModal(null)}>
+      <p className="modal-description">Each workspace has its own collections, environments, history, and cookies. Request tabs close when you switch.</p>
+      <div className="workspace-list">{workspaceStore.workspaces.map(item => <div className="workspace-list-row" key={item.id}><button className={item.id === workspaceStore.activeId ? 'button button-primary' : 'button button-secondary'} onClick={() => changeWorkspace(item.id)}>{item.name}{item.id === workspaceStore.activeId ? ' · Active' : ''}</button><span>{item.data.collections.length} collections</span><button className="text-button" disabled={workspaceStore.workspaces.length < 2 || !!busyId || !!runnerCollectionId} onClick={() => deleteWorkspace(item.id)}>Delete</button></div>)}</div>
+      <label className="field-label">Rename active workspace<input className="field-input" value={workspaceDraftName} placeholder={workspaceName} onChange={event => setWorkspaceDraftName(event.target.value)} /></label>
+      <div className="modal-footer"><button className="button button-secondary" disabled={!workspaceDraftName.trim()} onClick={() => { setWorkspaceStore(current => ({ ...current, workspaces: current.workspaces.map(item => item.id === current.activeId ? { ...item, name: workspaceDraftName.trim() } : item) })); setWorkspaceDraftName(''); }}>Rename active</button><button className="button button-primary" disabled={!workspaceDraftName.trim() || workspaceStore.workspaces.length >= 100 || !!busyId || !!runnerCollectionId} onClick={createWorkspace}>Create new workspace</button></div>
+      {dialogError && <p className="dialog-error" role="alert">{dialogError}</p>}
+    </Modal>}
     {modal === 'save' && <Modal title="Save request" onClose={() => setModal(null)}>
       <form noValidate onSubmit={event => { event.preventDefault(); if (!saveName.trim()) { setDialogError('Enter a request name.'); return; } if (collectionId) persistRequest(saveName, collectionId); }}>
         <label className="field-label">Request name<input className="field-input" aria-required="true" value={saveName} onChange={event => setSaveName(event.target.value)} /></label>
@@ -518,10 +581,14 @@ export default function App() {
         <div className="modal-footer"><button className="button button-secondary" type="button" onClick={() => setModal(null)}>Cancel</button><button className="button button-primary" type="submit" disabled={!collectionName.trim()}>Create collection</button></div>
       </form>
     </Modal>}
-    {modal === 'environment' && <Modal title="Global environment variables" wide onClose={() => setModal(null)}>
-      <p className="modal-description">Shared fallback values for every request. An enabled collection variable with the same name takes priority. Reference values with <code>{'{{base_url}}'}</code>; nested variable references are supported.</p>
-      <KeyValueEditor rows={workspace.variables} kind="variable" onChange={variables => setWorkspace(current => ({ ...current, variables }))} />
-      <div className="environment-note"><Icon name="lock" size={14} />Values are stored in this browser and included in workspace exports.</div>
+    {modal === 'environment' && <Modal title="Environments" wide onClose={() => setModal(null)}>
+      <p className="modal-description">Base variables apply when no environment overrides them. Collection variables take priority over both. Switch environments to use different values for the same requests.</p>
+      <label className="field-label">Active environment<select className="field-input" value={workspace.activeEnvironmentId || ''} onChange={event => setWorkspace(current => ({ ...current, activeEnvironmentId: event.target.value || undefined }))}><option value="">Base variables only</option>{(workspace.environments || []).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <div className="environment-manage"><input className="field-input" aria-label="Environment name" placeholder="New environment name" value={environmentDraftName} onChange={event => setEnvironmentDraftName(event.target.value)} /><button className="button button-secondary" disabled={!environmentDraftName.trim()} onClick={() => { const id = crypto.randomUUID(); setWorkspace(current => ({ ...current, environments: [...(current.environments || []), { id, name: environmentDraftName.trim(), variables: [] }], activeEnvironmentId: id })); setEnvironmentDraftName(''); }}>Add environment</button></div>
+      {activeEnvironment(workspace) && <div className="environment-manage"><button className="text-button" disabled={!environmentDraftName.trim()} onClick={() => { setWorkspace(current => ({ ...current, environments: current.environments?.map(item => item.id === current.activeEnvironmentId ? { ...item, name: environmentDraftName.trim() } : item) })); setEnvironmentDraftName(''); }}>Rename selected</button><button className="text-button" onClick={() => { const target = activeEnvironment(workspace)!; setConfirmation({ title: 'Delete environment?', description: `“${target.name}” and its variable overrides will be deleted.`, confirmLabel: 'Delete environment', onConfirm: () => setWorkspace(current => ({ ...current, environments: current.environments?.filter(item => item.id !== target.id), activeEnvironmentId: undefined })) }); }}>Delete selected</button></div>}
+      <h3>{activeEnvironment(workspace)?.name || 'Base variables'}</h3>
+      <KeyValueEditor rows={activeEnvironment(workspace)?.variables || workspace.variables} kind="variable" onChange={variables => setWorkspace(current => current.activeEnvironmentId ? { ...current, environments: current.environments?.map(item => item.id === current.activeEnvironmentId ? { ...item, variables } : item) } : { ...current, variables })} />
+      <div className="environment-note"><Icon name="lock" size={14} />Values are stored locally and included in workspace exports.</div>
       <div className="modal-footer"><button className="button button-primary" onClick={() => setModal(null)}>Done</button></div>
     </Modal>}
     {modal === 'cookies' && <Modal title="Cookie jar" wide onClose={() => setModal(null)}><CookieEditor cookies={workspace.cookies} defaultDomain={(() => { try { return new URL(draft.url).hostname; } catch { return ''; } })()} onChange={cookies => setWorkspace(current => ({ ...current, cookies }))} onClear={() => setConfirmation({ title: 'Clear cookie jar?', description: `Delete all ${workspace.cookies.length} stored cookies from this workspace?`, confirmLabel: 'Clear cookies', onConfirm: () => setWorkspace(current => ({ ...current, cookies: [] })) })} /></Modal>}
@@ -547,19 +614,19 @@ export default function App() {
         setModal(null); setToast('Request moved.');
       }}>Move request</button></div>
     </Modal>}
-    {modal === 'import' && <Modal title={pendingImport ? 'Replace your workspace?' : 'Import workspace'} wide onClose={() => setModal(null)}>
+    {modal === 'import' && <Modal title={pendingImport ? importFormat === 'Postman environment' ? 'Add environment?' : 'Replace active workspace?' : 'Import workspace'} wide onClose={() => setModal(null)}>
       {pendingImport ? <>
-        <p className="modal-description">This import will replace your saved collections, request history, environment variables, and cookie jar. Open request tabs will stay available. Export your current workspace first if you want to keep a backup.</p>
-        <div className="import-summary"><div><strong>{pendingImport.collections.length}</strong><span>Collections</span></div><div><strong>{pendingImport.saved.length}</strong><span>Requests</span></div><div><strong>{pendingImport.variables.length}</strong><span>Variables</span></div></div>
-        <div className="modal-footer"><button className="button button-secondary" onClick={() => setPendingImport(null)} data-dialog-initial-focus>Back</button><button className="button button-danger" onClick={() => { setWorkspace(pendingImport); setModal(null); setToast('Workspace imported.'); }}>Replace workspace</button></div>
+        <p className="modal-description">{importFormat} import. {importFormat === 'Postman environment' ? 'This adds a named environment and keeps your existing collections and variables.' : 'This replaces the active workspace’s saved collections, request history, environments, and cookie jar.'} Open request tabs will stay available. Export your current workspace first if you want to keep a backup.</p>
+        <div className="import-summary"><div><strong>{pendingImport.collections.length}</strong><span>Collections</span></div><div><strong>{pendingImport.saved.length}</strong><span>Requests</span></div><div><strong>{pendingImport.variables.length + (pendingImport.environments || []).reduce((total, item) => total + item.variables.length, 0)}</strong><span>Variables</span></div></div>
+        <div className="modal-footer"><button className="button button-secondary" onClick={() => setPendingImport(null)} data-dialog-initial-focus>Back</button><button className="button button-danger" onClick={() => { setWorkspace(pendingImport); setModal(null); setToast(importFormat === 'Postman environment' ? 'Environment imported.' : 'Workspace imported.'); }}>{importFormat === 'Postman environment' ? 'Add environment' : 'Replace active workspace'}</button></div>
       </> : <>
-        <p className="modal-description">Drop a Reqora JSON export here or paste its contents below. You can review it before replacing your workspace.</p>
+        <p className="modal-description">Drop a Reqora, Postman, Insomnia, or OpenAPI JSON export here, or paste JSON or a cURL command below. You can review the result before applying it.</p>
         <div className={`import-drop-zone ${draggingImport ? 'dragging' : ''}`} role="region" aria-label="Drop a workspace file" onDragOver={event => { event.preventDefault(); setDraggingImport(true); }} onDragLeave={() => setDraggingImport(false)} onDrop={event => {
           event.preventDefault(); setDraggingImport(false);
           if (event.dataTransfer.files.length !== 1) { setDialogError('Drop one workspace JSON file at a time.'); return; }
           void readImportFile(event.dataTransfer.files[0]);
-        }}><Icon name="upload" size={26} /><strong>Drop your workspace file</strong><span>Reqora JSON · Up to 5 MB · Processed locally</span></div>
-        <label className="field-label">Or paste workspace JSON<textarea className="import-json" value={importText} placeholder={'{ "version": 1, "collections": [...] }'} onChange={event => { setImportText(event.target.value); setDialogError(''); }} spellCheck={false} /></label>
+        }}><Icon name="upload" size={26} /><strong>Drop your workspace file</strong><span>JSON or cURL · Up to 5 MB · Processed locally</span></div>
+        <label className="field-label">Or paste JSON or cURL<textarea className="import-json" value={importText} placeholder={'{ "version": 1, "collections": [...] }'} onChange={event => { setImportText(event.target.value); setDialogError(''); }} spellCheck={false} /></label>
         {dialogError && <p className="dialog-error" role="alert">{dialogError}</p>}
         <div className="modal-footer"><button className="button button-secondary" onClick={() => setModal(null)}>Cancel</button><button className="button button-primary" onClick={() => reviewImport(importText)}>Review import</button></div>
       </>}

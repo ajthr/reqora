@@ -34,7 +34,8 @@ export interface Draft extends RequestAutomation, AuthConfig {
 export interface SavedRequest { collectionId: string; request: Draft }
 export interface Collection extends Partial<ScriptSettings> { id: string; name: string; description: string; variables: Entry[]; auth?: AuthConfig }
 export interface HistoryItem { id: string; date: string; request: Draft; status?: number; durationMs?: number; error?: string }
-export interface Workspace { version: 1; collections: Collection[]; saved: SavedRequest[]; history: HistoryItem[]; variables: Entry[]; cookies: CookieRecord[] }
+export interface Environment { id: string; name: string; variables: Entry[] }
+export interface Workspace { version: 1; environments?: Environment[]; activeEnvironmentId?: string; collections: Collection[]; saved: SavedRequest[]; history: HistoryItem[]; variables: Entry[]; cookies: CookieRecord[] }
 
 export const newEntry = (name = '', value = ''): Entry => ({ id: crypto.randomUUID(), enabled: true, name, value });
 
@@ -58,6 +59,14 @@ export function initialWorkspace(): Workspace {
 
 export interface ScopedVariable extends Entry { scope: 'global' | 'collection' }
 
+export function activeEnvironment(workspace: Workspace): Environment | undefined {
+  return workspace.environments?.find(item => item.id === workspace.activeEnvironmentId);
+}
+export function workspaceGlobals(workspace: Workspace): Entry[] {
+  const environment = activeEnvironment(workspace);
+  return environment ? [...workspace.variables, ...environment.variables] : workspace.variables;
+}
+
 export function getVariableScope(globals: Entry[], collection: Entry[] = []): ScopedVariable[] {
   const effective = new Map<string, ScopedVariable>();
   for (const [scope, entries] of [['global', globals], ['collection', collection]] as const) {
@@ -75,7 +84,7 @@ export function getRequestCollection(workspace: Workspace, request: Draft): Coll
 }
 
 export function prepareWorkspaceRequest(workspace: Workspace, request: Draft, files?: ReadonlyMap<string, string>): HttpRequest {
-  return { ...prepareRequest(request, workspace.variables, getRequestCollection(workspace, request)?.variables, files, getRequestCollection(workspace, request)?.auth), ...(normalizedNetworkSettings(request.network).useCookies ? { cookies: workspace.cookies } : {}) };
+  return { ...prepareRequest(request, workspaceGlobals(workspace), getRequestCollection(workspace, request)?.variables, files, getRequestCollection(workspace, request)?.auth), ...(normalizedNetworkSettings(request.network).useCookies ? { cookies: workspace.cookies } : {}) };
 }
 
 export function requestFiles(request: Draft): FileReference[] {
@@ -240,11 +249,12 @@ export function parseWorkspace(text: string): Workspace {
   if (data?.version !== 1 || !Array.isArray(data.collections) || !data.collections.every(item => typeof item?.id === 'string' && typeof item?.name === 'string' && isScriptSettings(item) && (item.auth === undefined || isAuthConfig(item.auth, false))
       && (item.description === undefined || typeof item.description === 'string') && (item.variables === undefined || Array.isArray(item.variables) && item.variables.every(isEntry)))
     || !Array.isArray(data.saved) || !data.saved.every(item => typeof item?.collectionId === 'string' && data.collections.some(collection => collection.id === item.collectionId) && isDraft(item?.request))
-    || !Array.isArray(data.variables) || !data.variables.every(isEntry) || (data.cookies !== undefined && !isCookieJar(data.cookies))
+    || !Array.isArray(data.variables) || !data.variables.every(isEntry) || (data.environments !== undefined && (!Array.isArray(data.environments) || !data.environments.every(item => typeof item?.id === 'string' && typeof item?.name === 'string' && Array.isArray(item?.variables) && item.variables.every(isEntry)))) || (data.activeEnvironmentId !== undefined && typeof data.activeEnvironmentId !== 'string') || (data.cookies !== undefined && !isCookieJar(data.cookies))
     || !Array.isArray(data.history) || !data.history.every(item => typeof item?.id === 'string' && typeof item?.date === 'string' && isDraft(item?.request)
       && (item.status === undefined || typeof item.status === 'number') && (item.durationMs === undefined || typeof item.durationMs === 'number') && (item.error === undefined || typeof item.error === 'string'))) {
     throw new Error('This file is not a valid Reqora workspace export.');
   }
+  if (data.activeEnvironmentId && !data.environments?.some(item => item.id === data.activeEnvironmentId)) throw new Error('This file has an invalid active environment.');
   return { ...data, cookies: data.cookies ?? [], collections: data.collections.map(item => ({ ...item, description: item.description ?? '', variables: item.variables ?? [] })),
     saved: data.saved.map(item => ({ ...item, request: normalizeDraft(item.request) })),
     history: data.history.slice(0, 100).map(item => ({ ...item, request: normalizeDraft(item.request) })),

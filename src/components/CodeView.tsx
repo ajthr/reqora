@@ -12,11 +12,11 @@ function SyntaxLine({ text }: { text: string }) {
   return <>{parts}</>;
 }
 
-export default function CodeView({ text, highlight }: { text: string; highlight: boolean }) {
+export default function CodeView({ text, highlight, search = '' }: { text: string; highlight: boolean; search?: string }) {
   const lines = text.slice(0, 100_000).split('\n').slice(0, 2000);
   const truncated = text.length > 100_000 || text.split('\n').length > 2000;
   return <div className="code-view" aria-label="Response body" tabIndex={0}>
-    {lines.map((line, index) => <div className="code-line" key={index}><span className="line-number" aria-hidden="true">{index + 1}</span><code>{highlight ? <SyntaxLine text={line} /> : line || ' '}</code></div>)}
+    {lines.map((line, index) => <div className="code-line" key={index}><span className="line-number" aria-hidden="true">{index + 1}</span><code>{search ? line.split(new RegExp(`(${search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi')).map((part, partIndex) => part.toLowerCase() === search.toLowerCase() ? <mark key={partIndex}>{part}</mark> : part) : highlight ? <SyntaxLine text={line} /> : line || ' '}</code></div>)}
     {truncated && <p className="preview-notice">Preview limited to 100 KB / 2,000 lines. Download the complete response.</p>}
   </div>;
 }

@@ -13,6 +13,7 @@ import { runRequest } from '../server/pipeline.ts';
 const HELP = `Reqora collection runner
 Usage: reqora run WORKSPACE.json [options]
   --collection NAME_OR_ID    Required if the workspace has multiple collections
+  --environment NAME_OR_ID   Select a named environment from the export
   --request NAME_OR_ID       Select/order requests (repeat this flag)
   --data FILE.json|FILE.csv  Run each data row per iteration
   --iterations NUMBER       Repeat the dataset (default: 1)
@@ -47,7 +48,7 @@ export async function main(args: string[]): Promise<number> {
       const flag = args[i];
       if (flag === '--bail') { bail = true; continue; }
       if (flag === '--quiet') { quiet = true; continue; }
-      if (!['--collection', '--request', '--data', '--iterations', '--delay', '--var', '--files', '--report', '--junit', '--save-variables'].includes(flag) || args[i + 1] === undefined || args[i + 1].startsWith('--')) throw new Error(`Unknown option or missing value: ${flag}`);
+      if (!['--collection', '--environment', '--request', '--data', '--iterations', '--delay', '--var', '--files', '--report', '--junit', '--save-variables'].includes(flag) || args[i + 1] === undefined || args[i + 1].startsWith('--')) throw new Error(`Unknown option or missing value: ${flag}`);
       const value = args[++i];
       if (flag === '--request') selected.push(value);
       else if (flag === '--var') {
@@ -59,6 +60,12 @@ export async function main(args: string[]): Promise<number> {
     const path = resolve(args[1]);
     if ((await stat(path)).size > 5 * 1024 * 1024) throw new Error('Workspace files must be smaller than 5 MB.');
     const workspace = parseWorkspace(await readFile(path, 'utf8'));
+    if (values['--environment']) {
+      const value = values['--environment'];
+      const matches = workspace.environments?.filter(item => item.id === value || item.name === value) || [];
+      if (matches.length !== 1) throw new Error('Select one environment by unique name or ID using --environment.');
+      workspace.activeEnvironmentId = matches[0].id;
+    }
     const collectionById = workspace.collections.find(item => item.id === values['--collection']);
     const collectionMatches = collectionById ? [collectionById] : values['--collection'] ? workspace.collections.filter(item => item.name === values['--collection']) : workspace.collections;
     if (collectionMatches.length !== 1) throw new Error('Select one collection by unique name or ID using --collection.');

@@ -18,15 +18,15 @@ Reqora now has its first working REST workflow: a shared React and TypeScript wo
 - GET, POST, PUT, PATCH, DELETE, HEAD, and OPTIONS requests over HTTP and HTTPS.
 - Query parameters, request headers, JSON/XML/text bodies, structured URL-encoded forms, multipart text/file uploads, and binary file bodies.
 - Basic, bearer, API key, OAuth 2.0 (PKCE/client credentials/refresh), OAuth 1.0a, Digest, and AWS Signature V4 helpers, with inherited collection authentication.
-- Global environment and per-collection variables with `{{variable}}` substitution in URLs, parameters, headers, authentication, and bodies. Collection values take priority over globals, including in generated cURL.
+- Named environments, base variables, and per-collection variables with `{{variable}}` substitution in URLs, parameters, headers, authentication, and bodies. Collection values take priority over the active environment and base variables, including in generated cURL.
 - Collection overview pages with descriptions, request lists, variable editors, and a resolved-value table showing the source of each effective variable.
 - A server-side request engine with cancellation, configurable timeouts, and optional redirect following.
 - A persistent workspace cookie jar with an editor, per-request cookie control, HTTP(S) proxy settings, custom CA certificates, and client certificates for mTLS.
-- Response status, elapsed time, decoded body size, headers, formatted JSON, raw text, copying, and downloads. Binary responses can be downloaded.
+- Response status, elapsed time, decoded body size, headers, cookies, body search, safe HTML/text/JSON previews, request/response details, and downloads. Binary responses can be downloaded.
 - Named collections, saved requests, search, and the last 100 request attempts in local history.
 - Three-dot menus on requests and collections for renaming, duplication, export, and deletion; request menus also support moving between collections and copying cURL.
 - Shared in-app dialogs for editing and destructive actions, with keyboard focus containment, Escape dismissal, and focus restoration.
-- Reqora workspace JSON import/export and POSIX-shell cURL command generation.
+- Reqora workspace JSON import/export; Postman collection/environment, Insomnia export, OpenAPI 3 JSON, and cURL command import; POSIX-shell cURL command generation.
 - Pre-request/post-response scripts at request and collection scope, response assertions, and response-to-variable extraction.
 - A sequential collection runner with JSON/CSV datasets, iterations, delay, cancellation, and optional variable persistence.
 - A CLI runner with JSON/JUnit reports and CI exit codes, using the same pipeline as the UI.
@@ -34,25 +34,25 @@ Reqora now has its first working REST workflow: a shared React and TypeScript wo
 
 Use the sidebar rail to switch between collections and history. Those views are not duplicated as workspace tabs. Text and editor sizes have been increased throughout the interface for readability.
 
-Open **Get a post** in the sample collection and select **Send** to try the client. The sample requests use JSONPlaceholder and require internet access. Edit **Global variables** to change the shared `base_url`, or override it for an individual collection.
+Open **Get a post** in the sample collection and select **Send** to try the client. The sample requests use JSONPlaceholder and require internet access. Edit **Environments** to change the shared `base_url`, or override it for an individual collection.
 
 ### Collections and variable hierarchy
 
 Select a collection's name in the sidebar to open its overview. The arrow beside the name independently expands or collapses its requests. The overview provides an automatically saved description and a searchable request list. Its **Variables** section edits collection values and shows effective values with their source. The collection's three-dot menu also opens its overview or variables directly.
 
-Variable priority, from highest to lowest, is **collection → global environment**. Unsaved requests created within a collection use that collection's variables; scratch requests use globals. Moving a saved request changes its scope to the destination collection. History replays retain the originating collection context when available.
+Variable priority, from highest to lowest, is **collection → active environment → base variables**. Unsaved requests created within a collection use that collection's variables; scratch requests use globals. Moving a saved request changes its scope to the destination collection. History replays retain the originating collection context when available.
 
-- Only enabled, non-empty variable names participate. An unchecked collection variable falls back to the global value.
-- An enabled empty string intentionally overrides the global value.
+- Only enabled, non-empty variable names participate. An unchecked environment variable falls back to the base value. An unchecked collection variable falls back to the active environment or base value.
+- An enabled empty string intentionally overrides values in lower priority scopes.
 - Names are trimmed and case-sensitive. If a name repeats in a scope, the last enabled row wins.
-- Values can reference other variables, for example global `base_url = https://{{host}}/v1` with a collection-specific `host` override. Resolution uses the final effective scope and reports missing references, cycles, excessive nesting, or excessive expanded values (1 MB in URLs/headers and 10 MB in body values).
+- Values can reference other variables, for example base `base_url = https://{{host}}/v1` with a collection-specific `host` override. Resolution uses the final effective scope and reports missing references, cycles, excessive nesting, or excessive expanded values (1 MB in URLs/headers and 10 MB in body values).
 - Workspace/request/collection exports preserve collection variables and descriptions. Duplicating a collection copies its variables independently. Older workspace files migrate with empty collection variables and descriptions.
 
 Close collection and request tabs to return to the startup page. Closing an overview preserves its automatically saved settings.
 
-Collections, saved request credentials, cookies, history, and environment values are stored in local browser storage without encryption. Workspace exports include those values. Web and desktop maintain separate local workspaces; use export/import to move between them. Save requests you want to keep before closing their tabs.
+Collections, saved request credentials, cookies, history, and environment values are stored in local browser storage without encryption. Workspace exports include those values. Multiple named workspaces are stored locally; use the Workspaces button to create, rename, switch, or delete them. New workspaces start empty. Web and desktop maintain separate data; use export/import to move a workspace between them. Save requests you want to keep before closing their tabs.
 
-To import a workspace, open **Import**, drag a Reqora JSON export into the custom dialog or paste its contents, then review and confirm replacement. Request and collection exports use the same workspace format and include environment values so variable references remain usable. Imports replace the saved workspace after confirmation; they do not merge into it.
+To import, open **Import**, drag a Reqora, Postman, Insomnia, or OpenAPI JSON export into the dialog, or paste JSON or a cURL command. Review the detected format and counts before confirming. Postman environment imports add a named environment to the current workspace and make it active. Request and collection exports use the same workspace format and include environment values so variable references remain usable. Collection imports replace the active workspace after confirmation; they do not merge into it. Imported nested folders are flattened into request names. External formats are converted to Reqora’s supported REST fields; advanced scripts, file attachments, and unsupported authentication settings are not imported. OpenAPI YAML must be converted to JSON first. cURL import accepts common method, header, body, URL, Basic auth, redirect, and timeout options and reports unsupported options.
 
 ### Request bodies
 

@@ -1,6 +1,7 @@
 import { applyVariableChanges, MAX_EXECUTIONS } from './automation.ts';
 import type { ExecutionInput, ExecutionResult, RunItem, RunReport, RunnerOptions } from './automation.ts';
 import { validateDataRows } from './data.ts';
+import { activeEnvironment, workspaceGlobals } from './workspace.ts';
 import type { Draft, Workspace } from './workspace.ts';
 import { applyAuthenticationUpdates } from './auth.ts';
 import type { CookieRecord } from './network.ts';
@@ -43,7 +44,7 @@ export async function runCollection(workspace: Workspace, collectionId: string, 
     let result: ExecutionResult;
     try {
       const files = await hooks.files?.(request, hooks.signal);
-      result = await hooks.execute({ request, globals: current.variables, collection: current.collections.find(item => item.id === collectionId), data: rows[dataIndex], files, iteration: pass * rows.length + dataIndex, cookies: current.cookies }, hooks.signal);
+      result = await hooks.execute({ request, globals: workspaceGlobals(current), collection: current.collections.find(item => item.id === collectionId), data: rows[dataIndex], files, iteration: pass * rows.length + dataIndex, cookies: current.cookies }, hooks.signal);
     } catch (error) {
       if (hooks.signal?.aborted) { report.cancelled = true; break outer; }
       result = { error: (error as Error).message, passed: false, tests: [], logs: [], changes: [] };
@@ -79,7 +80,7 @@ export async function runCollection(workspace: Workspace, collectionId: string, 
 function variableDelta(original: Workspace, current: Workspace, collectionId: string): RunReport['changes'] {
   const changes: RunReport['changes'] = [];
   for (const scope of ['global', 'collection'] as const) {
-    const entries = (workspace: Workspace) => scope === 'global' ? workspace.variables : workspace.collections.find(item => item.id === collectionId)?.variables || [];
+    const entries = (workspace: Workspace) => scope === 'global' ? activeEnvironment(workspace)?.variables ?? workspace.variables : workspace.collections.find(item => item.id === collectionId)?.variables || [];
     const before = new Map(entries(original).map(row => [row.name.trim(), row]));
     const after = new Map(entries(current).map(row => [row.name.trim(), row]));
     for (const name of before.keys()) if (name && !after.has(name)) changes.push({ scope, name });

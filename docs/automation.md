@@ -114,7 +114,7 @@ From source, use Node.js 24 and installed dependencies:
 ```sh
 npm ci
 npm run cli -- --help
-npm run cli -- run workspace.json --collection "My API" \
+npm run cli -- run workspace.json --collection "My API" --environment "Staging" \
   --data cases.csv --iterations 2 --delay 100 --bail \
   --report results.json --junit results.xml
 ```
@@ -145,3 +145,5 @@ Installed Linux/macOS bundles provide `~/.local/bin/reqora-run`. Windows provide
 ## API
 
 `POST /api/run-request` uses the same origin/content-type protections and 16 MB JSON payload limit as `/api/execute`. Send `{ request, globals, collection?, data?, files?, iteration?, cookies? }`: `request` is a Reqora draft; variables use the workspace entry format; `files` maps attachment IDs to base64 data; `cookies` is the current workspace jar. The response includes `{ response?, error?, passed, tests, logs, changes, authUpdates?, cookies? }`; internal `authUpdates` contain refreshed tokens and configuration guards for the owning request/collection and must not be included in exported run reports. Updated `cookies` must be persisted by the caller. HTTP status reflects transport/input validity; a valid execution with failed checks returns HTTP 200 with `passed: false`. The lower-level `/api/execute` endpoint accepts already-prepared HTTP requests, including active `auth`, `network`, and `cookies`, and does not run scripts or persist state. OAuth UI actions use `POST /api/auth`; `GET /api/auth/callback` accepts state-validated provider callbacks, and `POST /api/auth/preview` generates an OAuth 1 header without sending the resource request.
+
+CLI runs use the environment selected in the exported workspace by default. Pass `--environment NAME_OR_ID` to choose another named environment. Collection variables still take priority, and `--var` overrides values for that run.

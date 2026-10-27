@@ -62,12 +62,15 @@ export function applyVariableChanges<T extends { variables: Entry[]; collections
   const update = (entries: Entry[], change: VariableChange) => change.value === undefined ? entries.filter(entry => entry.name.trim() !== change.name)
     : [...entries.filter(entry => entry.name.trim() !== change.name), { id: crypto.randomUUID(), enabled: true, name: change.name, value: change.value }];
   let variables = workspace.variables;
+  let environments = 'environments' in workspace ? workspace.environments as { id: string; name: string; variables: Entry[] }[] | undefined : undefined;
+  const activeEnvironmentId = 'activeEnvironmentId' in workspace ? workspace.activeEnvironmentId as string | undefined : undefined;
   let collections = workspace.collections;
   for (const change of changes) {
-    if (change.scope === 'global') variables = update(variables, change);
+    if (change.scope === 'global' && activeEnvironmentId && environments?.some(item => item.id === activeEnvironmentId)) environments = environments.map(item => item.id === activeEnvironmentId ? { ...item, variables: update(item.variables, change) } : item);
+    else if (change.scope === 'global') variables = update(variables, change);
     else collections = collections.map(collection => collection.id === collectionId ? { ...collection, variables: update(collection.variables, change) } : collection);
   }
-  return { ...workspace, variables, collections };
+  return { ...workspace, variables, ...(environments ? { environments } : {}), collections };
 }
 export function readPath(value: unknown, path: string): unknown {
   if (path === '' || path === '$') return value;
