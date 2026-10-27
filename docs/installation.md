@@ -45,8 +45,8 @@ Uninstall through Windows Settings → Apps or the Start menu. Close desktop win
 Choose `linux` or `darwin` and the correct CPU (`x64` for Intel/AMD, `arm64` for Apple Silicon or ARM Linux). For example:
 
 ```sh
-tar -xzf reqora-0.1.0-linux-x64-both.tar.gz
-cd reqora-0.1.0-linux-x64-both
+tar -xzf reqora-0.1.0-beta.1-linux-x64-both.tar.gz
+cd reqora-0.1.0-beta.1-linux-x64-both
 ./install.sh
 ```
 
@@ -125,7 +125,11 @@ The build packages Electron using `@electron/packager`, downloads the matching o
 
 For a Developer ID build, supply `REQORA_MAC_SIGN_IDENTITY` with a certificate identity already installed in the macOS build keychain. The packager signs with that identity; **notarization and Windows Authenticode signing are not automated in this workflow**. Add your own notarization/signing process before public distribution and regenerate checksums after signing. Keep credentials outside the repository.
 
-The **Build installers** GitHub Actions workflow builds on native Linux, Windows, and macOS runners for x64 and arm64. Run it manually and choose a mode, or push a `vVERSION` tag matching `package.json` to build all modes. Download its artifacts from the workflow run. Each job silently/terminal-installs the packages, exercises the bundled web UI and engine, and uninstalls them. It uploads build artifacts only; it does not create or publish a GitHub Release. No repository URL or hosted download endpoint is assumed.
+The **Release from main** workflow builds on native Linux, Windows, and macOS runners for x64 and arm64. A push to **main** with an unpublished package version tests the source, builds all three modes for every target, smoke-tests their installation, and verifies every artifact's SHA-256. Only then does it create the matching `vVERSION` tag on that tested commit, upload all installers/checksums/a build manifest, and publish a GitHub Release. Versions with a suffix such as `0.1.0-beta.1` become prereleases. Published versions and their tags are not overwritten.
+
+Download public installers from [GitHub Releases](https://github.com/ajthr/reqora/releases). Workflow artifacts are available for 30 days; published release assets are permanent until explicitly removed. Run the workflow manually from **main** with **publish** off for diagnostic builds. Choosing **publish** requires all modes and all targets. **develop** pushes and pull requests run CI without publishing. See [release and branch procedure](releasing.md).
+
+On Windows, local package smoke tests refuse to run when Reqora is already installed in the current account, because the installer uses shared per-user registry keys. Use a clean account or the isolated CI runner. The desktop smoke test executes the installed Electron binary in Node mode and checks its CLI/version without opening a window; the web smoke test exercises installed assets and engine behavior.
 
 Native CI jobs and real-machine installation checks are required before declaring Windows/macOS installers verified. Local Linux builds do not validate Windows wizard interactions, macOS Gatekeeper, or every desktop distribution.
 

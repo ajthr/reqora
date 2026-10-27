@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve, relative, sep } from 'node:path';
+import { parseVersion } from './release-lib.mjs';
 
 const exec = promisify(execFile);
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -22,9 +23,10 @@ if (!['linux', 'darwin', 'win32'].includes(platform) || !['x64', 'arm64'].includ
 }
 if (process.versions.node.split('.')[0] !== '24') throw new Error('Release builds require Node.js 24.');
 const pkg = JSON.parse(await readFile('package.json', 'utf8'));
-if (!/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(pkg.version)) throw new Error('Invalid release version.');
+const versionInfo = parseVersion(pkg.version);
 const release = resolve('release');
 const work = join(release, '.work', `${platform}-${arch}`);
+if (!work.startsWith(release + sep) || work === release) throw new Error('Invalid packaging workspace.');
 await rm(work, { recursive: true, force: true });
 await mkdir(work, { recursive: true });
 const run = async (program, params, options = {}) => {
@@ -74,6 +76,13 @@ if (mode !== 'web') {
   const paths = await packager({
     dir: source, out: join(work, 'electron'), name: 'Reqora', executableName: 'reqora',
     platform, arch, electronVersion: pkg.devDependencies.electron,
+    appVersion: platform === 'darwin' ? versionInfo.core : pkg.version,
+    buildVersion: versionInfo.core,
+    afterInitialize: [async ({ buildPath }) => {
+      const path = join(buildPath, 'package.json');
+      const bundled = JSON.parse(await readFile(path, 'utf8'));
+      await writeFile(path, JSON.stringify({ ...bundled, version: pkg.version }, null, 2));
+    }],
     download: { cacheRoot: resolve('.cache/electron') },
     appBundleId: 'org.reqora.client', appCategoryType: 'public.app-category.developer-tools',
     appCopyright: 'Copyright (c) Ajith', overwrite: true, prune: false, asar: false,

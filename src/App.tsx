@@ -806,7 +806,7 @@ export default function App() {
       <div className="modal-footer"><button className="button button-secondary" disabled={backend === 'checking'} onClick={() => void checkBackend()}>Check connection</button><button className="button button-primary" onClick={() => setModal(null)}>Done</button></div>
     </Modal>}
     {modal === 'about' && <Modal title="About Reqora" onClose={() => setModal(null)}>
-      <div className="about-brand" {...brandingInteractionProps}><img src={logo} alt="Reqora" draggable={false} /><div><strong>Reqora</strong><span>Version 0.1.0 · MIT License</span></div></div>
+      <div className="about-brand" {...brandingInteractionProps}><img src={logo} alt="Reqora" draggable={false} /><div><strong>Reqora</strong><span>Version {__APP_VERSION__} · MIT License</span></div></div>
       <p className="modal-description">A free, open-source REST client for exploring and testing APIs. One shared TypeScript workspace, in your browser and on your desktop.</p>
       <p className="modal-description">This early release includes request execution, collections, local history, environment variables, and workspace import/export.</p>
       <div className="modal-footer"><button className="button button-primary" onClick={() => setModal(null)}>Back to workspace</button></div>

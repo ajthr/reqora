@@ -9,13 +9,19 @@ import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { initialWorkspace, newDraft } from '../shared/workspace.ts';
 
-const exec = promisify(execFile);
+const exec = (program, args, options = {}) => promisify(execFile)(program, args, { windowsHide: true, ...options });
 const requested = process.argv[2] || 'all';
 if (!['all', 'desktop', 'web', 'both'].includes(requested)) throw new Error('Usage: npm run test:packages -- [all|desktop|web|both]');
 const modes = requested === 'all' ? ['desktop', 'web', 'both'] : [requested];
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const release = resolve('release');
 const windows = process.platform === 'win32';
+if (windows) {
+  for (const key of ['HKCU\\Software\\Reqora', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Reqora']) {
+    const present = await exec('reg.exe', ['query', key]).then(() => true, error => { if (error.code === 1) return false; throw error; });
+    if (present) throw Error('Package smoke tests require an isolated Windows account without an existing Reqora installation.');
+  }
+}
 for (const mode of modes) {
   const temporary = await mkdtemp(join(tmpdir(), 'reqora-package-'));
   const prefix = join(temporary, 'installed');
@@ -30,7 +36,12 @@ for (const mode of modes) {
       await exec('/bin/sh', [join(temporary, name, 'install.sh'), '--mode', mode, '--prefix', prefix, '--bin-dir', bin], { env });
     }
     if (mode !== 'web') {
-      await access(join(prefix, 'desktop', process.platform === 'darwin' ? 'Reqora.app/Contents/MacOS/reqora' : windows ? 'reqora.exe' : 'reqora'));
+      const binary = join(prefix, 'desktop', process.platform === 'darwin' ? 'Reqora.app/Contents/MacOS/reqora' : windows ? 'reqora.exe' : 'reqora');
+      await access(binary);
+      const resources = join(prefix, 'desktop', ...(process.platform === 'darwin' ? ['Reqora.app', 'Contents', 'Resources'] : ['resources']), 'app');
+      assert.equal(JSON.parse(await readFile(join(resources, 'package.json'), 'utf8')).version, pkg.version);
+      const desktopCli = await exec(binary, [join(resources, 'dist-electron/cli/main.js'), '--help'], { env: { ...env, ELECTRON_RUN_AS_NODE: '1' }, timeout: 30_000 });
+      assert.match(desktopCli.stdout, /Reqora collection runner/);
     } else await assert.rejects(access(join(prefix, 'desktop')));
     if (mode !== 'desktop') {
       const runtime = join(prefix, 'web/runtime', windows ? 'node.exe' : 'node');

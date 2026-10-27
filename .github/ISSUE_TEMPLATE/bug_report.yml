@@ -1,0 +1,30 @@
+name: Bug report
+description: Report a reproducible Reqora problem
+body:
+  - type: markdown
+    attributes:
+      value: Do not include API keys, tokens, private URLs, or unredacted workspace exports. For sensitive security reports, see SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Reqora version
+      placeholder: 0.1.0-beta.1
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: OS, architecture, and desktop/web mode
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include expected and actual behavior using sanitized examples.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized logs or screenshots

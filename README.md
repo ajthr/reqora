@@ -176,7 +176,7 @@ The goal is comprehensive coverage of the REST workflows available in establishe
 
 ## Installation packages
 
-See [installation and release builds](docs/installation.md) for Windows setup wizards and Linux/macOS terminal installers. All three modes—desktop only, web UI only, or both—include their required runtimes. Build with `npm run package` or use the **Build installers** GitHub Actions workflow. Packages are generated into `release/`; no hosted release is published automatically.
+See [installation and release builds](docs/installation.md) for Windows setup wizards and Linux/macOS terminal installers. All three modes—desktop only, web UI only, or both—include their required runtimes. Build locally with `npm run package`; packages are generated into `release/`. Pushing an unpublished package version to **main** runs the **Release from main** workflow: it tests and packages all six platform/architecture targets, verifies checksums, creates the version tag on the tested commit, and publishes the GitHub Release after every job succeeds. `0.1.0-beta.1` is prepared as a prerelease. Development on **develop** and pull requests run CI without publication. See [release procedure](docs/releasing.md) and [beta notes](docs/releases/v0.1.0-beta.1.md).
 
 ## Development
 

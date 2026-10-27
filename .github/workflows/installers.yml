@@ -1,4 +1,4 @@
-name: Build installers
+name: Release from main
 
 on:
   workflow_dispatch:
@@ -8,37 +8,95 @@ on:
         type: choice
         default: all
         options: [all, desktop, web, both]
+      publish:
+        description: Publish a new version after all targets pass (main only; mode must be all)
+        type: boolean
+        default: false
   push:
-    tags: ['v*']
+    branches: [main]
 
 permissions:
   contents: read
 
+concurrency:
+  group: reqora-release-main
+  cancel-in-progress: false
+
 jobs:
-  package:
-    name: ${{ matrix.os }} / ${{ matrix.arch }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { os: ubuntu-22.04, arch: x64 }
-          - { os: ubuntu-22.04-arm, arch: arm64 }
-          - { os: windows-2022, arch: x64 }
-          - { os: windows-11-arm, arch: arm64 }
-          - { os: macos-15-intel, arch: x64 }
-          - { os: macos-15, arch: arm64 }
+  plan:
+    name: Validate release version and target
+    runs-on: ubuntu-24.04
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      publish: ${{ steps.plan.outputs.publish }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      mode: ${{ steps.plan.outputs.mode }}
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Plan build and publication
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_MODE: ${{ inputs.mode || 'all' }}
+          RELEASE_PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+        run: node scripts/release.mjs plan
+
+  checks:
+    name: Test and build release source
+    needs: plan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - run: npm run release:check
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  package:
+    name: Package ${{ matrix.platform }} / ${{ matrix.arch }}
+    needs: [plan, checks]
+    if: needs.plan.outputs.build == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
           architecture: ${{ matrix.arch }}
           cache: npm
       - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       - run: npm run typecheck
       - run: npm test
+      - name: Install Linux desktop runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-0t64 libnss3 libasound2t64 libgbm1
       - name: Install Windows wizard compiler
         if: runner.os == 'Windows'
         shell: pwsh
@@ -47,26 +105,49 @@ jobs:
             choco install nsis --yes --no-progress
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-      - name: Check tag matches package version
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        run: node --input-type=module -e 'import fs from "node:fs"; const p = JSON.parse(fs.readFileSync("package.json")); if (process.env.GITHUB_REF_NAME !== `v${p.version}`) throw new Error("Tag must match package.json version");'
       - name: Build installation packages
         env:
-          PACKAGE_MODE: ${{ inputs.mode || 'all' }}
-        run: npm run package -- --mode ${{ env.PACKAGE_MODE }}
+          PACKAGE_MODE: ${{ needs.plan.outputs.mode }}
+        run: npm run package -- --mode ${{ needs.plan.outputs.mode }}
       - name: Install, exercise, and uninstall packages
         env:
-          PACKAGE_MODE: ${{ inputs.mode || 'all' }}
-        run: npm run test:packages -- ${{ env.PACKAGE_MODE }}
+          PACKAGE_MODE: ${{ needs.plan.outputs.mode }}
+        run: npm run test:packages -- ${{ needs.plan.outputs.mode }}
       - name: Upload installers and checksums
         uses: actions/upload-artifact@v4
         with:
-          name: reqora-${{ runner.os }}-${{ matrix.arch }}
+          name: reqora-${{ needs.plan.outputs.version }}-${{ matrix.platform }}-${{ matrix.arch }}
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
           compression-level: 0
           path: |
             release/*.exe
             release/*.tar.gz
             release/SHA256SUMS-*.txt
+
+  publish:
+    name: Verify assets and publish GitHub Release
+    needs: [plan, checks, package]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Collect this run's native packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: reqora-${{ needs.plan.outputs.version }}-*
+          merge-multiple: true
+          path: release-assets
+      - name: Verify all checksums, create the exact-commit tag, upload, then publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_MODE: all
+          RELEASE_PUBLISH: 'true'
+        run: node scripts/release.mjs publish release-assets

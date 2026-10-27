@@ -1,6 +1,6 @@
 {
   "name": "reqora",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.1",
   "private": true,
   "description": "A free, open-source REST client for web and desktop.",
   "author": "Ajith",
@@ -27,7 +27,8 @@
     "package:web": "npm run package -- --mode web",
     "package:all": "npm run package -- --mode both",
     "test:packages": "node scripts/smoke-install.mjs",
-    "cli": "node cli/reqora.mjs"
+    "cli": "node cli/reqora.mjs",
+    "release:check": "node scripts/release.mjs check"
   },
   "dependencies": {
     "@smithy/hash-node": "4.5.2",
