@@ -190,6 +190,18 @@ test('CLI produces JSON/JUnit reports and persisted variables, with CI-friendly 
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test('CLI entry point runs through a directory alias without running twice through its wrapper', async () => {
+  const exec = promisify(execFile), directory = await mkdtemp(join(tmpdir(), 'reqora-cli-alias-'));
+  try {
+    const alias = join(directory, 'project');
+    await symlink(fileURLToPath(new URL('../', import.meta.url)), alias, process.platform === 'win32' ? 'junction' : 'dir');
+    for (const entry of ['main.ts', 'reqora.mjs']) {
+      const result = await exec(process.execPath, [join(alias, 'cli', entry), '--help']);
+      assert.equal((result.stdout.match(/Reqora collection runner/g) || []).length, 1);
+    }
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test('CLI only reads uploads from the explicitly allowed directory', { skip: process.platform === 'win32' }, async () => {
   const exec = promisify(execFile), directory = await mkdtemp(join(tmpdir(), 'reqora-cli-files-'));
   try {

@@ -117,4 +117,7 @@ export async function main(args: string[]): Promise<number> {
   finally { process.removeListener('SIGINT', cancel); process.removeListener('SIGTERM', cancel); }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) process.exitCode = await main(process.argv.slice(2));
+// ESM resolves directory aliases (including macOS /var -> /private/var).
+// Compare canonical paths so the installed CLI still recognizes direct execution.
+const entryPoint = process.argv[1] ? await realpath(resolve(process.argv[1])).catch(() => undefined) : undefined;
+if (entryPoint && import.meta.url === pathToFileURL(entryPoint).href) process.exitCode = await main(process.argv.slice(2));
