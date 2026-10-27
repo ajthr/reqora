@@ -3,7 +3,7 @@ import { readFile, writeFile, stat, realpath } from 'node:fs/promises';
 import { resolve, join, sep, relative, isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { publicRunReport, applyVariableChanges } from '../shared/automation.ts';
-import type { DataRow, RunReport } from '../shared/automation.ts';
+import type { CheckResult, DataRow, RunReport } from '../shared/automation.ts';
 import { parseRunData } from '../shared/data.ts';
 import { runCollection } from '../shared/runner.ts';
 import { parseWorkspace, requestFiles } from '../shared/workspace.ts';
@@ -29,8 +29,9 @@ Exit codes: 0 pass, 1 failed checks/requests, 2 configuration error, 130 cancell
 `;
 
 const xml = (value: unknown) => String(value).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/g, '').replace(/[<>&"']/g, char => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' })[char]!);
+const checkDetails = (test: CheckResult) => [test.error || 'Check failed', ...(test.issues || []).map(issue => `${issue.path}: ${issue.message}`), ...(test.expected !== undefined ? [`Expected: ${test.expected}`, `Actual: ${test.actual}`] : [])].join('\n');
 export function junitReport(report: RunReport): string {
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<testsuite name="${xml(report.collectionName)}" tests="${report.results.length + Number(report.cancelled)}" failures="${report.failed}" skipped="${Number(report.cancelled)}" time="${report.durationMs / 1000}">\n${report.results.map(item => `  <testcase name="${xml(item.name)} [iteration ${item.iteration + 1}]" classname="${xml(report.collectionName)}" time="${(item.durationMs || 0) / 1000}">${item.passed ? '' : `<failure message="${xml(item.error || 'Checks failed')}">${xml(item.tests.filter(test => !test.passed).map(test => `${test.name}: ${test.error || 'Failed'}`).join('\n') || item.error || 'Request failed')}</failure>`}</testcase>`).join('\n')}${report.cancelled ? '\n  <testcase name="Cancelled run"><skipped /></testcase>' : ''}\n</testsuite>\n`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<testsuite name="${xml(report.collectionName)}" tests="${report.results.length + Number(report.cancelled)}" failures="${report.failed}" skipped="${Number(report.cancelled)}" time="${report.durationMs / 1000}">\n${report.results.map(item => `  <testcase name="${xml(item.name)} [iteration ${item.iteration + 1}]" classname="${xml(report.collectionName)}" time="${(item.durationMs || 0) / 1000}">${item.passed ? '' : `<failure message="${xml(item.error || 'Checks failed')}">${xml(item.tests.filter(test => !test.passed).map(test => `${test.name}: ${checkDetails(test)}`).join('\n') || item.error || 'Request failed')}</failure>`}</testcase>`).join('\n')}${report.cancelled ? '\n  <testcase name="Cancelled run"><skipped /></testcase>' : ''}\n</testsuite>\n`;
 }
 
 export async function main(args: string[]): Promise<number> {
@@ -103,7 +104,7 @@ export async function main(args: string[]): Promise<number> {
       onResult: item => {
         if (quiet) return;
         console.log(`${item.passed ? 'PASS' : 'FAIL'} [${item.iteration + 1}] ${item.name} ${item.status ?? 'ERR'}${item.error ? ` — ${item.error}` : ''}`);
-        for (const test of item.tests.filter(test => !test.passed)) console.error(`  FAIL ${test.name}: ${test.error || 'Check failed'}`);
+        for (const test of item.tests.filter(test => !test.passed)) console.error(`  FAIL ${test.name}: ${checkDetails(test)}`);
         for (const log of item.logs) console.log(`  [${log.phase} ${log.level}] ${log.message}`);
       },
     });

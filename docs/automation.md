@@ -6,7 +6,7 @@ Execution order:
 
 1. Collection pre-request script.
 2. Request pre-request script.
-3. Resolve variables and validate an imported OpenAPI request body, then send HTTP or produce a local mock response.
+3. Check custom schema definitions, resolve variables and validate the custom/imported request body, then send HTTP or produce a local mock response.
 4. Collection post-response script.
 5. Request post-response script.
 6. Response JSON schema validation, then declarative assertions.
@@ -16,9 +16,11 @@ Pre-request scripts can create variables or edit the outgoing request before int
 
 ## API schema checks and mock responses
 
-The **Schema** tab accepts a custom response JSON schema. OpenAPI 3 JSON imports also attach request and response schemas to generated requests; local `#/components/schemas/...` references resolve against the imported collection. Enable schema validation to use them. An invalid outgoing JSON request body stops before HTTP; a response mismatch is reported as a failed schema check. A custom response schema takes precedence over imported response schemas. Unsupported schema keywords and external references fail explicitly.
+The **Schema** tab accepts custom request and response JSON schemas. OpenAPI 3 JSON imports also attach operation schemas; local `#/components/schemas/...` references resolve against the imported collection. Enable validation to use them. Each custom schema takes precedence over its corresponding imported schema. An invalid outgoing JSON request body stops before HTTP; a response mismatch is reported as a failed schema check. An optional imported request body is not checked when no body is configured; a required body or custom request schema requires JSON content. Unsupported schema keywords, malformed rule definitions, and external references fail explicitly. Custom schemas are JSON definitions without variable interpolation and can resolve their own local references.
 
-The **Mock** tab returns a local configured status, headers, and body without HTTP. The same pre/post scripts, assertions, schema checks, and extraction rules then run against that response in the UI or CLI. Mocks are not hosted as an endpoint.
+Schema results contain a `phase` (Configuration, Request, or Response) and up to 30 structured `issues`, each with a JSON pointer-style `path` and `message`. Paths beginning `$schema` refer to the schema definition rather than the response data. Response definition selection prefers exact status over status-class/default definitions, then matches the content type. A defined media type without a schema permits any body; a response definition without content expects an empty body. Failed assertions include `actual` and `expected` text capped at 2,000 characters. These fields remain available in collection JSON reports; CLI output and JUnit failures include the details too. Reports can therefore contain values from the response.
+
+The **Mock** tab returns a local configured status, headers, and body without HTTP. The same pre/post scripts, assertions, response schema checks, and extraction rules run in the UI or CLI. Custom schema definitions are still checked, but outgoing request body validation is skipped because no HTTP request is sent. Mocks are not hosted as an endpoint.
 
 ## Scripts
 
@@ -76,7 +78,7 @@ In **Tests**, add checked rules using a source:
 - A response header name, matched case-insensitively.
 - The full response body string.
 
-Assertion operators include equals, not equals, contains, exists, less than, and greater than. Expected values are interpolated and parsed as JSON when valid: `200` means a number, `true` means a boolean, and `"200"` forces a string. Deep equality ignores object property order. Array `contains` checks an item; string `contains` checks a substring. Wildcards, filters, and arbitrary JSONPath expressions are unsupported.
+Assertion operators include equals, not equals, contains, exists, does not exist, has type, length equals, less/greater than, and less/greater than or equal. Expected values are interpolated and parsed as JSON when valid: `200` means a number, `true` means a boolean, and `"200"` forces a string. Has type instead takes a literal type name: `string`, `number`, `integer`, `boolean`, `null`, `array`, or `object`. Length equals counts Unicode characters, array items, or object properties and expects a non-negative integer. Missing and null values are distinct. Deep equality ignores object property order. Array `contains` checks an item; string `contains` checks a substring. Wildcards, filters, and arbitrary JSONPath expressions are unsupported.
 
 For extraction, supply a variable name and choose Collection or Global. Enable **Fail if the value is missing or extraction fails** for required values. Optional failures are reported without failing the run. Missing values never overwrite existing variables. Empty strings and JSON null are valid extracted values. A scratch request must use Global scope.
 

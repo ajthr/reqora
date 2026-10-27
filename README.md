@@ -23,7 +23,7 @@ Reqora now has its first working REST workflow: a shared React and TypeScript wo
 - Collection overview pages with descriptions, request lists, variable editors, and a resolved-value table showing the source of each effective variable.
 - A server-side request engine with cancellation, configurable timeouts, and optional redirect following.
 - A persistent workspace cookie jar with an editor, per-request cookie control, HTTP(S) proxy settings, custom CA certificates, and client certificates for mTLS.
-- Response status, elapsed time, decoded body size, headers, cookies, body search, safe HTML/text/JSON previews, request/response details, saved response examples, and downloads. Binary responses can be downloaded.
+- Response status, elapsed time, decoded body size, headers, cookies, searchable body with match navigation, collapsible JSON trees and path filtering, comparison against saved examples, safe HTML/text/JSON and image previews, request/response details, and downloads. Binary responses can be downloaded.
 - Named collections, one-level folders, saved requests, drag-and-drop/manual ordering, search, and the last 100 request attempts in local history.
 - Three-dot menus on requests and collections for renaming, duplication, export, and deletion; request menus also support moving between collections and copying cURL.
 - Shared in-app dialogs for editing and destructive actions, with keyboard focus containment, Escape dismissal, and focus restoration.
@@ -68,11 +68,19 @@ Exports contain saved data, not unsaved request tabs. They can include credentia
 
 ### API schemas and mocks
 
-Open a request's **Schema** tab to enable JSON validation. Paste a custom response JSON schema, or import an OpenAPI 3 JSON document to attach its operation request and response schemas. Request body mismatches stop the HTTP call; response mismatches appear as failed checks in **Tests**, collection runs, and CLI reports. Imported schemas resolve local `#/components/schemas/...` references. Custom response schemas take priority over imported response definitions.
+Open a request's **Schema** tab to enable JSON validation. Paste custom request and/or response JSON schemas, or import an OpenAPI 3 JSON document to attach its operation schemas. Each custom schema takes priority over the corresponding imported schema. Schema definitions are checked before execution; request body mismatches stop the HTTP call. Request failures show their checks even when no response was received. Response mismatches appear as failed checks in **Tests**, collection runs, and CLI reports, with up to 30 individual field paths and messages. Imported schemas resolve local `#/components/schemas/...` references; standalone custom schemas can use local `$defs`/`definitions` references. Schemas themselves are not interpolated; request body variables resolve before validation.
 
 Use **Mock** to return a configured status, headers, and body without contacting the URL. Mock sends still run scripts, response checks, schema validation, and variable extraction. A MOCK badge identifies their results. Mocks are request-local and are included in workspace exports; they do not expose a separate mock server endpoint.
 
 Schema validation supports types, required/properties/items, additional properties, enum/const, length/item/property/number bounds, multipleOf, allOf/anyOf/oneOf, common string formats, and local references. Unsupported keywords and external references fail the check explicitly. Manual schemas and mock bodies are size-limited in the editor.
+
+### Inspect and compare responses
+
+- **Body** provides Pretty/Raw views and literal, case-insensitive search. Previous/Next navigates the highlighted matches. Rendering and search cover the first 100,000 characters / 2,000 lines, with up to 5,000 navigable matches. Downloads retain the full response within the engine limit.
+- **Tree** provides collapsible JSON objects/arrays, value copying, and JSON pointer copying. Filter with paths such as `$.users[0].id` or `/users/0/id`; wildcard and recursive JSONPath expressions are not supported. Missing paths and invalid JSON are explained inline. Large branches load 100 children at a time, with a 30-level display limit.
+- **Compare** compares the current response with a saved response example from the same request. Status, reason phrase, headers, and bodies are checked. JSON comparison ignores formatting and object key order; text and binary bodies use exact comparison. Comparison is bounded to 100 differences, 10,000 nodes, and 40 levels, and displayed values to 2,000 characters. A truncated example compares only status and headers, with an explicit notice.
+- **Preview** supports JSON/text, sandboxed HTML, and common raster images. HTML scripts, forms, and external resources are blocked. **Details** uses the executed method and resolved URL, so editing a request after sending does not change the displayed execution details.
+- **Tests** shows schema field errors, assertions, extraction results, and script logs. Failed assertions include bounded expected/actual values; JSON and JUnit reports retain those details. Extra operators include type, length, missing-value checks, and inclusive numeric bounds.
 
 ### Request bodies
 

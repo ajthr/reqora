@@ -2,6 +2,7 @@ import type { HttpResponse } from './types.ts';
 import type { Collection, Draft, Entry } from './workspace.ts';
 import type { AuthenticationUpdate } from './auth.ts';
 import type { CookieRecord } from './network.ts';
+import type { SchemaIssue } from './schema.ts';
 
 export const MAX_SCRIPT_LENGTH = 32_768;
 export const MAX_CHECKS = 100;
@@ -10,15 +11,15 @@ export type DataRow = Record<string, unknown>;
 export type VariableScope = 'global' | 'collection';
 export interface VariableChange { scope: VariableScope; name: string; value?: string }
 export type ValueSource = 'status' | 'json' | 'header' | 'body' | 'duration';
-export type AssertionOperator = 'equals' | 'notEquals' | 'contains' | 'exists' | 'lessThan' | 'greaterThan';
+export type AssertionOperator = 'equals' | 'notEquals' | 'contains' | 'exists' | 'notExists' | 'isType' | 'lengthEquals' | 'lessThan' | 'greaterThan' | 'lessThanOrEqual' | 'greaterThanOrEqual';
 export interface Assertion { id: string; enabled: boolean; name: string; source: ValueSource; path: string; operator: AssertionOperator; expected: string }
 export interface Extraction { id: string; enabled: boolean; name: string; source: ValueSource; path: string; variable: string; scope: VariableScope; required: boolean }
 export interface ScriptSettings { preRequestScript: string; postResponseScript: string }
 export interface RequestAutomation extends ScriptSettings { assertions: Assertion[]; extractions: Extraction[] }
-export interface CheckResult { name: string; passed: boolean; kind: 'script' | 'assertion' | 'extraction' | 'schema'; error?: string; phase?: string }
+export interface CheckResult { name: string; passed: boolean; kind: 'script' | 'assertion' | 'extraction' | 'schema'; error?: string; phase?: string; issues?: SchemaIssue[]; actual?: string; expected?: string; path?: string }
 export interface ScriptLog { level: 'log' | 'warn' | 'error'; message: string; phase: string }
 export interface ExecutionInput { request: Draft; globals: Entry[]; collection?: Collection; data?: DataRow; files?: Record<string, string>; iteration?: number; cookies?: CookieRecord[] }
-export interface ExecutionResult { mocked?: boolean; response?: HttpResponse; error?: string; tests: CheckResult[]; logs: ScriptLog[]; changes: VariableChange[]; passed: boolean; authUpdates?: AuthenticationUpdate[]; cookies?: CookieRecord[] }
+export interface ExecutionResult { mocked?: boolean; request?: { method: string; url: string }; response?: HttpResponse; error?: string; tests: CheckResult[]; logs: ScriptLog[]; changes: VariableChange[]; passed: boolean; authUpdates?: AuthenticationUpdate[]; cookies?: CookieRecord[] }
 export interface RunnerOptions { iterations: number; delayMs: number; stopOnFailure: boolean; data: DataRow[]; requestIds?: string[] }
 export interface RunItem {
   requestId: string; name: string; method: string; url: string; iteration: number; dataIndex: number;
@@ -54,7 +55,7 @@ export function isAutomation(value: unknown): boolean {
     && row.name.length <= 500 && typeof row.enabled === 'boolean' && typeof row.path === 'string'
     && row.path.length <= 1024 && ['status', 'json', 'header', 'body', 'duration'].includes(row.source);
   return (config.assertions === undefined || Array.isArray(config.assertions) && config.assertions.length <= MAX_CHECKS && config.assertions.every(row => base(row)
-    && ['equals', 'notEquals', 'contains', 'exists', 'lessThan', 'greaterThan'].includes(row.operator) && typeof row.expected === 'string' && row.expected.length <= 16_384))
+    && ['equals', 'notEquals', 'contains', 'exists', 'notExists', 'isType', 'lengthEquals', 'lessThan', 'greaterThan', 'lessThanOrEqual', 'greaterThanOrEqual'].includes(row.operator) && typeof row.expected === 'string' && row.expected.length <= 16_384))
     && (config.extractions === undefined || Array.isArray(config.extractions) && config.extractions.length <= MAX_CHECKS && config.extractions.every(row => base(row)
       && typeof row.variable === 'string' && row.variable.length <= 255 && ['global', 'collection'].includes(row.scope) && typeof row.required === 'boolean'));
 }
@@ -72,14 +73,14 @@ export function applyVariableChanges<T extends { variables: Entry[]; collections
   }
   return { ...workspace, variables, ...(environments ? { environments } : {}), collections };
 }
-export function readPath(value: unknown, path: string): unknown {
-  if (path === '' || path === '$') return value;
+export function pathKeys(path: string): string[] {
+  if (path === '' || path === '$') return [];
   let keys: string[];
   if (path.startsWith('/')) {
     if (/~(?![01])/.test(path)) throw new Error('Invalid JSON pointer escape.');
     keys = path.slice(1).split('/').map(key => key.replace(/~1/g, '/').replace(/~0/g, '~'));
   } else {
-    let remaining = path.replace(/^\$\.?/, '');
+    let remaining = path.replace(/^\$/, '');
     keys = [];
     while (remaining) {
       const token = /^(?:\.?([\w$-]+)|\[(\d+)\])/.exec(remaining);
@@ -87,7 +88,10 @@ export function readPath(value: unknown, path: string): unknown {
       keys.push(token[1] ?? token[2]); remaining = remaining.slice(token[0].length);
     }
   }
-  for (const key of keys) {
+  return keys;
+}
+export function readPath(value: unknown, path: string): unknown {
+  for (const key of pathKeys(path)) {
     if (!value || typeof value !== 'object' || !Object.hasOwn(value, key)) return undefined;
     value = (value as Record<string, unknown>)[key];
   }
