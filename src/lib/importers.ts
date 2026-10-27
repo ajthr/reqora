@@ -9,6 +9,22 @@ const entries = (value: unknown, key = 'key'): Entry[] => rows(value).filter(row
 const collection = (name: string, description = ''): Collection => ({ id: crypto.randomUUID(), name: name || 'Imported collection', description, variables: [] });
 const blank = (): Workspace => ({ ...initialWorkspace(), collections: [], saved: [], variables: [], history: [], cookies: [] });
 const validate = (workspace: Workspace): Workspace => parseWorkspace(JSON.stringify(workspace));
+function importedFolders(root: Collection) {
+  const ids = new Map<string, string>();
+  return (path: string[]): string | undefined => {
+    if (path.length > 20) throw new Error('Imported folders are limited to 20 levels.');
+    let parentId: string | undefined;
+    for (let depth = 0; depth < path.length; depth++) {
+      const name = path[depth].trim();
+      if (!name) continue;
+      const key = JSON.stringify(path.slice(0, depth + 1));
+      let id = ids.get(key);
+      if (!id) { id = crypto.randomUUID(); ids.set(key, id); root.folders = [...(root.folders || []), { id, name, ...(parentId ? { parentId } : {}) }]; }
+      parentId = id;
+    }
+    return parentId;
+  };
+}
 function auth(target: Draft, source: Obj) {
   const kind = string(source.type);
   const values = Object.fromEntries(rows(source[kind]).map(row => [row.key, row.value]));
@@ -27,16 +43,15 @@ function postman(data: Obj): Workspace {
   const root = collection(string(data.info?.name) || 'Postman collection', string(data.info?.description?.content || data.info?.description));
   root.variables = entries(data.variable);
   workspace.collections.push(root);
-  const folderIds = new Map<string, string>();
-  const folderFor = (name: string) => { if (!name) return undefined; let id = folderIds.get(name); if (!id) { id = crypto.randomUUID(); folderIds.set(name, id); root.folders = [...(root.folders || []), { id, name }]; } return id; };
+  const folderFor = importedFolders(root);
   const visit = (items: unknown, path: string[]) => { for (const item of rows(items)) {
-    if (Array.isArray(item.item)) { visit(item.item, [...path, string(item.name)]); continue; }
+    if (Array.isArray(item.item)) { const nested = [...path, string(item.name)].filter(Boolean); folderFor(nested); visit(item.item, nested); continue; }
     if (!item.request) continue;
     const request = object(item.request), url = request.url;
     const draft = { ...newDraft(root.id), name: string(item.name) || 'Imported request', method: string(request.method).toUpperCase() || 'GET', url: typeof url === 'string' ? url : string(url?.raw), headers: entries(request.header), params: entries(url?.query) };
     body(draft, object(request.body)); auth(draft, object(request.auth));
     const examples = rows(item.response).slice(0, 30).map(sample => ({ id: crypto.randomUUID(), name: string(sample.name) || `${sample.code || 200} response`, status: Number(sample.code) || 200, statusText: string(sample.status), headers: rows(sample.header).filter(header => string(header.key)).map(header => ({ name: string(header.key), value: string(header.value) })), body: string(sample.body).slice(0, 150_000), encoding: 'utf8' as const, truncated: string(sample.body).length > 150_000 }));
-    workspace.saved.push({ collectionId: root.id, folderId: folderFor(path.filter(Boolean).join(' / ')), ...(examples.length ? { examples } : {}), request: draft });
+    workspace.saved.push({ collectionId: root.id, folderId: folderFor(path.filter(Boolean)), ...(examples.length ? { examples } : {}), request: draft });
   } };
   visit(data.item, []);
   if (!workspace.saved.length) throw new Error('The Postman collection contains no requests.');
@@ -45,10 +60,10 @@ function postman(data: Obj): Workspace {
 function insomnia(data: Obj): Workspace {
   const workspace = blank(), resources = rows(data.resources);
   const groups = new Map<string, Obj>(resources.filter(row => row._type === 'request_group').map(row => [string(row._id), row]));
-  const groupName = (id: string): string => { const names: string[] = []; const seen = new Set<string>(); while (groups.has(id) && !seen.has(id)) { seen.add(id); const group = groups.get(id)!; names.unshift(string(group.name)); id = string(group.parentId); } return names.join(' / '); };
+  const groupName = (id: string): string[] => { const names: string[] = []; const seen = new Set<string>(); while (groups.has(id)) { if (seen.has(id)) throw new Error('The Insomnia export contains a folder cycle.'); seen.add(id); const group = groups.get(id)!; names.unshift(string(group.name)); id = string(group.parentId); } return names; };
   const root = collection(string(resources.find(row => row._type === 'workspace')?.name) || 'Insomnia collection'); workspace.collections.push(root);
-  const folderIds = new Map<string, string>();
-  const folderFor = (name: string) => { if (!name) return undefined; let id = folderIds.get(name); if (!id) { id = crypto.randomUUID(); folderIds.set(name, id); root.folders = [...(root.folders || []), { id, name }]; } return id; };
+  const folderFor = importedFolders(root);
+  for (const id of groups.keys()) folderFor(groupName(id));
   for (const item of resources.filter(row => row._type === 'request')) {
     const draft = { ...newDraft(root.id), name: string(item.name) || 'Imported request', method: string(item.method).toUpperCase() || 'GET', url: string(item.url), headers: entries(item.headers, 'name'), params: entries(item.parameters, 'name') };
     const b = object(item.body); if (typeof b.text === 'string') { draft.body = b.text; draft.bodyType = string(b.mimeType).includes('json') ? 'json' : string(b.mimeType).includes('xml') ? 'xml' : 'text'; }

@@ -9,6 +9,7 @@ import { inspectJsonSchema, matchingResponseSchema, validateJsonSchema } from '.
 import { checkValue, compareAssertion } from '../shared/assertions.ts';
 import { authConfigurationKey } from '../shared/auth.ts';
 import { isCookieJar, normalizedNetworkSettings } from '../shared/network.ts';
+import { executeMock } from './mocks.ts';
 
 export function validateExecutionInput(value: unknown): ExecutionInput {
   if (!value || typeof value !== 'object') throw new RequestError('Provide a request and its variable context.');
@@ -76,13 +77,10 @@ export async function runRequest(value: unknown, signal?: AbortSignal): Promise<
       }
     }
     if (request.mock?.enabled) {
-      const mock = request.mock;
       result.mocked = true;
+      result.mockScenario = request.mock.scenarios?.find(item => item.id === request.mock!.activeScenarioId)?.name;
       result.request = { method: request.method, url: request.url };
-      const body = interpolate(mock.body, scope(), 100_000);
-      const headers = mock.headers.map(header => ({ name: header.name, value: interpolate(header.value, scope()) }));
-      if (!headers.some(header => header.name.toLowerCase() === 'content-type')) headers.push({ name: 'Content-Type', value: 'application/json' });
-      result.response = { url: request.url, status: mock.status, statusText: mock.statusText || 'Mock response', headers, body, encoding: 'utf8', durationMs: 0, size: new TextEncoder().encode(body).length };
+      result.response = await executeMock(request, scope(), signal);
     } else {
       const prepared = prepareRequest({ ...request, method: request.method.toUpperCase() }, state.variables, [...(state.collections[0]?.variables || []), ...rowEntries], new Map(Object.entries(input.files || {})), state.collections[0]?.auth);
       result.request = { method: prepared.method, url: prepared.url };

@@ -103,7 +103,7 @@ export async function main(args: string[]): Promise<number> {
       },
       onResult: item => {
         if (quiet) return;
-        console.log(`${item.passed ? 'PASS' : 'FAIL'} [${item.iteration + 1}] ${item.name} ${item.status ?? 'ERR'}${item.error ? ` — ${item.error}` : ''}`);
+        console.log(`${item.passed ? 'PASS' : 'FAIL'} [${item.iteration + 1}] ${item.name} ${item.status ?? 'ERR'}${item.mocked ? ` [mock${item.mockScenario ? ': ' + item.mockScenario : ''}]` : ''}${item.error ? ` — ${item.error}` : ''}`);
         for (const test of item.tests.filter(test => !test.passed)) console.error(`  FAIL ${test.name}: ${checkDetails(test)}`);
         for (const log of item.logs) console.log(`  [${log.phase} ${log.level}] ${log.message}`);
       },

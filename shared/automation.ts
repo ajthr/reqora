@@ -19,9 +19,10 @@ export interface RequestAutomation extends ScriptSettings { assertions: Assertio
 export interface CheckResult { name: string; passed: boolean; kind: 'script' | 'assertion' | 'extraction' | 'schema'; error?: string; phase?: string; issues?: SchemaIssue[]; actual?: string; expected?: string; path?: string }
 export interface ScriptLog { level: 'log' | 'warn' | 'error'; message: string; phase: string }
 export interface ExecutionInput { request: Draft; globals: Entry[]; collection?: Collection; data?: DataRow; files?: Record<string, string>; iteration?: number; cookies?: CookieRecord[] }
-export interface ExecutionResult { mocked?: boolean; request?: { method: string; url: string }; response?: HttpResponse; error?: string; tests: CheckResult[]; logs: ScriptLog[]; changes: VariableChange[]; passed: boolean; authUpdates?: AuthenticationUpdate[]; cookies?: CookieRecord[] }
+export interface ExecutionResult { mocked?: boolean; mockScenario?: string; request?: { method: string; url: string }; response?: HttpResponse; error?: string; tests: CheckResult[]; logs: ScriptLog[]; changes: VariableChange[]; passed: boolean; authUpdates?: AuthenticationUpdate[]; cookies?: CookieRecord[] }
 export interface RunnerOptions { iterations: number; delayMs: number; stopOnFailure: boolean; data: DataRow[]; requestIds?: string[] }
 export interface RunItem {
+  mocked?: boolean; mockScenario?: string;
   requestId: string; name: string; method: string; url: string; iteration: number; dataIndex: number;
   status?: number; durationMs?: number; error?: string; passed: boolean; tests: CheckResult[]; logs: ScriptLog[];
   testCounts?: { passed: number; failed: number }; detailsTruncated?: boolean;

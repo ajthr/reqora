@@ -20,7 +20,11 @@ The **Schema** tab accepts custom request and response JSON schemas. OpenAPI 3 J
 
 Schema results contain a `phase` (Configuration, Request, or Response) and up to 30 structured `issues`, each with a JSON pointer-style `path` and `message`. Paths beginning `$schema` refer to the schema definition rather than the response data. Response definition selection prefers exact status over status-class/default definitions, then matches the content type. A defined media type without a schema permits any body; a response definition without content expects an empty body. Failed assertions include `actual` and `expected` text capped at 2,000 characters. These fields remain available in collection JSON reports; CLI output and JUnit failures include the details too. Reports can therefore contain values from the response.
 
-The **Mock** tab returns a local configured status, headers, and body without HTTP. The same pre/post scripts, assertions, response schema checks, and extraction rules run in the UI or CLI. Custom schema definitions are still checked, but outgoing request body validation is skipped because no HTTP request is sent. Mocks are not hosted as an endpoint.
+The **Mock** tab returns a local configured status, headers, and body without HTTP. Each saved request can keep a default response and up to 20 named scenarios. The selected scenario's status, headers, text/base64 body, delay, and failure mode apply in ordinary sends, collection runs, and the CLI. Save edits before running or exporting. `mocked` and optional `mockScenario` fields identify run records; the CLI also labels mocked executions.
+
+Text bodies and header values resolve variables using the normal environment/collection/data hierarchy. Base64 bodies are canonical literal bytes. A delay is cancellable and bounded by the request timeout; simulated network or timeout failures occur after that delay. Failed or cancelled mocks produce no response and do not execute post-response scripts, checks, or extraction. Returned mocks run those stages normally. Custom schema definitions are still checked, but outgoing request body validation is skipped because no HTTP request is sent. HEAD, 1xx, 204, 205, and 304 suppress response bodies. Mocks are not hosted as an endpoint.
+
+Use a saved response example to populate a mock, preserving decoded bytes and omitting framing/compression headers. Truncated examples and bodies above the 100,000-character mock limit are rejected. Cookie headers remain inspectable, but local mock responses do not update the workspace cookie jar.
 
 ## Scripts
 
@@ -87,6 +91,8 @@ Example: extract `$.token` from a login response into collection variable `token
 ## UI collection runner
 
 Open a collection and select **Run collection**, or use its three-dot menu. The runner executes **saved requests**; save open edits first.
+
+Nested folders follow sidebar order: root requests, then each folder's own requests followed by descendants. **Run folder** starts with that subtree preselected; selection/order can still be adjusted. Export a folder to run or share just that subtree with its collection configuration and environments. Moving a folder preserves descendant request IDs and scope; moving a request across collections changes its inherited variables and authentication.
 
 - Select requests and reorder them with the up/down buttons.
 - Choose iterations, a delay between requests, and whether to stop after the first failure.

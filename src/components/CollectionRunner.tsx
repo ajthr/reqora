@@ -13,13 +13,13 @@ import Dialog from './Dialog';
 import AutomationResults from './AutomationResults';
 import Icon from './Icon';
 
-export default function CollectionRunner({ workspace, collectionId, onClose, onWorkspaceChange, onAuthenticationUpdate, onCookieUpdate }: {
-  workspace: Workspace; collectionId: string; onClose: () => void; onWorkspaceChange: (update: (workspace: Workspace) => Workspace) => void; onAuthenticationUpdate: (updates: AuthenticationUpdate[]) => void; onCookieUpdate: (cookies: CookieRecord[]) => void;
+export default function CollectionRunner({ workspace, collectionId, initialRequestIds, folderLabel, onClose, onWorkspaceChange, onAuthenticationUpdate, onCookieUpdate }: {
+  workspace: Workspace; collectionId: string; initialRequestIds?: string[]; folderLabel?: string; onClose: () => void; onWorkspaceChange: (update: (workspace: Workspace) => Workspace) => void; onAuthenticationUpdate: (updates: AuthenticationUpdate[]) => void; onCookieUpdate: (cookies: CookieRecord[]) => void;
 }) {
   const collection = workspace.collections.find(item => item.id === collectionId)!;
   const requests = orderedSaved(workspace, collectionId).map(item => item.request);
   const [order, setOrder] = useState(requests.map(request => request.id));
-  const [selected, setSelected] = useState(order);
+  const [selected, setSelected] = useState(initialRequestIds || order);
   const [iterations, setIterations] = useState(1);
   const [delayMs, setDelay] = useState(0);
   const [stopOnFailure, setStopOnFailure] = useState(false);
@@ -71,7 +71,8 @@ export default function CollectionRunner({ workspace, collectionId, onClose, onW
   const move = (index: number, direction: number) => {
     const next = [...order]; [next[index], next[index + direction]] = [next[index + direction], next[index]]; setOrder(next);
   };
-  return <Dialog title={`Run collection: ${collection.name}`} wide onClose={() => { abort.current?.abort(); onClose(); }}>
+  return <Dialog title={folderLabel ? `Run folder: ${folderLabel}` : `Run collection: ${collection.name}`} wide onClose={() => { abort.current?.abort(); onClose(); }}>
+    {folderLabel && <p className="automation-help">Requests in this folder and its descendants are preselected. You can adjust the selection before running.</p>}
     <div className="collection-runner"><p className="automation-help">Saved requests run sequentially in the order below; save open edits first. Each data row is one iteration; the iteration count repeats the full dataset. Changes flow between requests within this run.</p>
       <fieldset disabled={busy} className="runner-configuration"><legend>Run configuration</legend>
         <div className="runner-options"><label>Iterations<input aria-label="Run iterations" type="number" min={1} max={1000} value={iterations} onChange={event => setIterations(Number(event.target.value))} /></label><label>Delay between requests (ms)<input type="number" min={0} max={60_000} value={delayMs} onChange={event => setDelay(Number(event.target.value))} /></label><label className="runner-check"><input type="checkbox" checked={stopOnFailure} onChange={event => setStopOnFailure(event.target.checked)} />Stop on failure</label><label className="runner-check"><input type="checkbox" checked={persist} onChange={event => setPersist(event.target.checked)} />Save variable changes to workspace</label></div>
@@ -82,7 +83,7 @@ export default function CollectionRunner({ workspace, collectionId, onClose, onW
       </fieldset>
       {(configError || error) && <p className="error-text" role="alert">{error || configError}</p>}
       <div className="runner-controls"><span>{busy ? `${report?.completed || 0} / ${planned} completed` : `${planned} request execution${planned === 1 ? '' : 's'}`}</span>{report && <button className="button button-secondary" onClick={exportReport} disabled={busy}><Icon name="download" size={15} />Export report</button>}{busy ? <button className="button button-danger" onClick={() => abort.current?.abort()}>Cancel run</button> : <button className="button button-primary" disabled={!!configError} onClick={() => void start()}><Icon name="send" size={15} />Run collection</button>}</div>
-      {report && <section className="runner-results" aria-label="Collection run results"><div className="runner-summary"><strong>{report.passed} passed</strong><strong className={report.failed ? 'error-text' : ''}>{report.failed} failed</strong><span>{report.cancelled ? 'Cancelled' : busy ? 'Running' : `${report.completed} / ${report.planned} completed`} · {report.durationMs} ms</span></div>{report.results.length > 100 && <p className="automation-help">Showing the latest 100 executions. Export the report for all results.</p>}{report.results.slice(-100).map((item, i) => <details className="runner-result" key={`${item.iteration}:${item.requestId}:${i}`}><summary><span className={item.passed ? 'success-text' : 'error-text'}>{item.passed ? 'PASS' : 'FAIL'}</span><strong>{item.name}</strong><span>Iteration {item.iteration + 1} · {item.status || 'ERR'}</span></summary>{item.detailsTruncated && <p className="automation-help">Details truncated. Total checks: {item.testCounts?.passed || 0} passed, {item.testCounts?.failed || 0} failed.</p>}<AutomationResults tests={item.tests} logs={item.logs} error={item.error} /></details>)}</section>}
+      {report && <section className="runner-results" aria-label="Collection run results"><div className="runner-summary"><strong>{report.passed} passed</strong><strong className={report.failed ? 'error-text' : ''}>{report.failed} failed</strong><span>{report.cancelled ? 'Cancelled' : busy ? 'Running' : `${report.completed} / ${report.planned} completed`} · {report.durationMs} ms</span></div>{report.results.length > 100 && <p className="automation-help">Showing the latest 100 executions. Export the report for all results.</p>}{report.results.slice(-100).map((item, i) => <details className="runner-result" key={`${item.iteration}:${item.requestId}:${i}`}><summary><span className={item.passed ? 'success-text' : 'error-text'}>{item.passed ? 'PASS' : 'FAIL'}</span><strong>{item.name}</strong>{item.mocked && <span className="mock-badge">MOCK{item.mockScenario ? ' · ' + item.mockScenario : ''}</span>}<span>Iteration {item.iteration + 1} · {item.status || 'ERR'}</span></summary>{item.detailsTruncated && <p className="automation-help">Details truncated. Total checks: {item.testCounts?.passed || 0} passed, {item.testCounts?.failed || 0} failed.</p>}<AutomationResults tests={item.tests} logs={item.logs} error={item.error} /></details>)}</section>}
     </div>
   </Dialog>;
 }

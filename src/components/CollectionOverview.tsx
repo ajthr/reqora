@@ -32,7 +32,7 @@ export default function CollectionOverview({ collection, requests, folderName, g
   const effective = useMemo(() => getVariableScope(globals, collection.variables), [globals, collection.variables]);
   const collectionCount = getVariableScope([], collection.variables).length;
   const globalCount = getVariableScope(globals).length;
-  const filtered = requests.filter(request => `${request.name} ${request.url} ${request.method}`.toLowerCase().includes(search.toLowerCase()));
+  const filtered = requests.filter(request => `${request.name} ${request.url} ${request.method} ${folderName(request.id) || ''}`.toLowerCase().includes(search.toLowerCase()));
   const globalNames = new Set(getVariableScope(globals).map(entry => entry.name));
 
   return <section className="collection-overview" aria-label={`Collection overview: ${collection.name}`}>

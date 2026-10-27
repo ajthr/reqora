@@ -67,7 +67,7 @@ export async function runCollection(workspace: Workspace, collectionId: string, 
       if (size <= detailBudget) { (destination as unknown[]).push(detail); detailBudget -= size; }
     }
     const item: RunItem = { requestId: request.id, name: request.name.slice(0, 500), method: request.method, url: (result.response?.url || request.url).slice(0, 4096), iteration: pass * rows.length + dataIndex, dataIndex,
-      status: result.response?.status, durationMs: result.response?.durationMs, error: result.error?.slice(0, 2000), passed: result.passed, tests, logs,
+      status: result.response?.status, durationMs: result.response?.durationMs, error: result.error?.slice(0, 2000), passed: result.passed, tests, logs, mocked: result.mocked, mockScenario: result.mockScenario,
       testCounts: { passed: result.tests.filter(test => test.passed).length, failed: result.tests.filter(test => !test.passed).length }, detailsTruncated: tests.length !== result.tests.length || logs.length !== result.logs.length };
     report.results.push(item); report.completed++; report.passed += Number(item.passed); report.failed += Number(!item.passed);
     report.durationMs = Date.now() - start;

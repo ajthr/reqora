@@ -8,6 +8,7 @@ import type { RequestAutomation, ScriptSettings } from './automation.ts';
 import { isMockSettings, isSchemaSettings } from './schema.ts';
 import type { MockSettings, SchemaSettings } from './schema.ts';
 import { isFileName, isMediaType, MAX_BODY_BYTES, MAX_BODY_FIELDS } from './body.ts';
+import { isFolderTree } from './organization.ts';
 
 export interface Entry { id: string; enabled: boolean; name: string; value: string }
 export interface FileReference { id: string; name: string; type: string; size: number }
@@ -36,7 +37,7 @@ export interface Draft extends RequestAutomation, AuthConfig {
   mock?: MockSettings;
 }
 export interface ResponseExample { id: string; name: string; status: number; statusText: string; headers: { name: string; value: string }[]; body: string; encoding: 'utf8' | 'base64'; truncated?: boolean }
-export interface Folder { id: string; name: string }
+export interface Folder { id: string; name: string; parentId?: string }
 export interface SavedRequest { collectionId: string; folderId?: string; examples?: ResponseExample[]; request: Draft }
 export interface Collection extends Partial<ScriptSettings> { id: string; name: string; description: string; variables: Entry[]; folders?: Folder[]; schemaDefinitions?: Record<string, unknown>; auth?: AuthConfig }
 export interface HistoryItem { id: string; date: string; request: Draft; status?: number; durationMs?: number; error?: string }
@@ -261,6 +262,7 @@ export function parseWorkspace(text: string): Workspace {
     throw new Error('This file is not a valid Reqora workspace export.');
   }
   if (data.activeEnvironmentId && !data.environments?.some(item => item.id === data.activeEnvironmentId)) throw new Error('This file has an invalid active environment.');
+  if (data.collections.some(collection => !isFolderTree(collection.folders || []))) throw new Error('Folders must have unique IDs, valid parents, no cycles, and at most 20 levels / 1000 folders per collection.');
   return { ...data, cookies: data.cookies ?? [], collections: data.collections.map(item => ({ ...item, description: item.description ?? '', variables: item.variables ?? [] })),
     saved: data.saved.map(item => ({ ...item, request: normalizeDraft(item.request) })),
     history: data.history.slice(0, 100).map(item => ({ ...item, request: normalizeDraft(item.request) })),

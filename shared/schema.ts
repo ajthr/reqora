@@ -142,7 +142,8 @@ export function validateJsonSchema(value: unknown, schema: unknown, definitions?
 }
 export interface OpenApiResponseSchema { status: string; mediaType: string; schema?: unknown }
 export interface SchemaSettings { enabled: boolean; manualResponse: string; manualRequest?: string; requestSchema?: unknown; requestRequired?: boolean; responses?: OpenApiResponseSchema[] }
-export interface MockSettings { enabled: boolean; status: number; statusText: string; headers: { name: string; value: string }[]; body: string }
+export type { MockSettings } from './mocks.ts';
+export { isMockSettings } from './mocks.ts';
 export function isSchemaSettings(value: unknown): value is SchemaSettings {
   if (!object(value)) return false;
   return typeof value.enabled === 'boolean' && typeof value.manualResponse === 'string' && value.manualResponse.length <= 100_000
@@ -150,12 +151,6 @@ export function isSchemaSettings(value: unknown): value is SchemaSettings {
     && (value.requestRequired === undefined || typeof value.requestRequired === 'boolean')
     && (value.responses === undefined || Array.isArray(value.responses) && value.responses.length <= 100 && value.responses.every(item => object(item) && typeof item.status === 'string' && typeof item.mediaType === 'string'))
     && JSON.stringify(value).length <= 600_000;
-}
-export function isMockSettings(value: unknown): value is MockSettings {
-  if (!object(value)) return false;
-  return typeof value.enabled === 'boolean' && Number.isInteger(value.status) && (value.status as number) >= 100 && (value.status as number) <= 599
-    && typeof value.statusText === 'string' && value.statusText.length <= 200 && typeof value.body === 'string' && value.body.length <= 100_000
-    && Array.isArray(value.headers) && value.headers.length <= 30 && value.headers.every(header => object(header) && typeof header.name === 'string' && header.name.length <= 255 && typeof header.value === 'string' && header.value.length <= 8192);
 }
 export function matchingResponseSchema(responses: OpenApiResponseSchema[], status: number, contentType: string): OpenApiResponseSchema | undefined {
   const code = String(status), media = contentType.split(';')[0].trim().toLowerCase();

@@ -8,7 +8,9 @@ import { responseCookies } from './components/ResponseInspector';
 import TransferImportDialog from './components/TransferImportDialog';
 import { appendWorkspaces, applyTransfer, exportEnvironments, exportWorkspace as serializeWorkspace, exportWorkspaceBundle, uniqueName } from './lib/workspace-transfer';
 import type { ImportOptions, TransferPreview } from './lib/workspace-transfer';
-import { moveCollectionBefore, moveFolderBefore, moveSaved, orderedSaved, shiftCollection, shiftFolder, shiftSaved } from '../shared/organization';
+import { deleteFolder, duplicateFolder, exportFolder, folderPath, folderSubtree, folderTree, isFolderTree, moveCollectionBefore, moveFolderBefore, moveSaved, orderedSaved, reparentFolder, saveSavedRequest, shiftCollection, shiftFolder, shiftSaved } from '../shared/organization';
+import FolderTree from './components/FolderTree';
+import { defaultMock, mockFromExample } from '../shared/mocks';
 import BodyEditor from './components/BodyEditor';
 import { readRequestFiles } from './lib/attachments';
 import { applyVariableChanges } from '../shared/automation';
@@ -85,6 +87,7 @@ export default function App() {
   const [modal, setModal] = useState<'workspaces' | 'folder' | 'organize' | 'example' | 'save' | 'collection' | 'environment' | 'cookies' | 'curl' | 'import' | 'rename' | 'move' | 'shortcuts' | 'about' | 'engine' | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [runnerCollectionId, setRunnerCollectionId] = useState<string | null>(null);
+  const [runnerFolderId, setRunnerFolderId] = useState('');
   const [dialogError, setDialogError] = useState('');
   const [actionTarget, setActionTarget] = useState<{ kind: 'request' | 'collection'; id: string } | null>(null);
   const [actionName, setActionName] = useState('');
@@ -93,6 +96,7 @@ export default function App() {
   const [collectionId, setCollectionId] = useState(workspace.collections[0]?.id || '');
   const [collectionName, setCollectionName] = useState('');
   const [folderName, setFolderName] = useState('');
+  const [folderParentId, setFolderParentId] = useState('');
   const [folderTarget, setFolderTarget] = useState<{ collectionId: string; id?: string } | null>(null);
   const [organizeRequestId, setOrganizeRequestId] = useState('');
   const [organizeFolderId, setOrganizeFolderId] = useState('');
@@ -226,7 +230,7 @@ export default function App() {
     if (!hasRequest) return;
     const request = { ...draft, name: name.trim() || 'Untitled request', collectionId: targetCollection };
     updateDraft({ name: request.name, collectionId: targetCollection });
-    setWorkspace(current => ({ ...current, saved: current.saved.some(item => item.request.id === request.id) ? current.saved.map(item => item.request.id === request.id ? { ...item, collectionId: targetCollection, request: structuredClone(request) } : item) : [...current.saved, { collectionId: targetCollection, request: structuredClone(request) }] }));
+    setWorkspace(current => saveSavedRequest(current, request, targetCollection));
     setModal(null);
     setToast('Request saved to your collection.');
   }
@@ -300,33 +304,61 @@ export default function App() {
     setToast(`${requestId ? 'Request' : 'Collection'} exported in Reqora format.`);
   }
 
-  function openFolder(collectionId: string, id?: string) {
+  function openFolder(collectionId: string, id?: string, parentId?: string) {
     const folder = workspace.collections.find(item => item.id === collectionId)?.folders?.find(item => item.id === id);
-    setFolderTarget({ collectionId, id }); setFolderName(folder?.name || ''); setModal('folder');
+    setFolderTarget({ collectionId, id }); setFolderName(folder?.name || ''); setFolderParentId(folder?.parentId || parentId || ''); setModal('folder');
   }
   function saveFolder() {
     const name = folderName.trim();
     if (!name || !folderTarget) { setDialogError('Enter a folder name.'); return; }
     const { collectionId, id } = folderTarget;
-    setWorkspace(current => ({ ...current, collections: current.collections.map(item => item.id !== collectionId ? item : id
-      ? { ...item, folders: (item.folders || []).map(folder => folder.id === id ? { ...folder, name } : folder) }
-      : { ...item, folders: [...(item.folders || []), { id: crypto.randomUUID(), name }] }) }));
-    setModal(null);
+    const collection = workspace.collections.find(item => item.id === collectionId);
+    if (!collection) return;
+    try {
+      const updated = id ? reparentFolder({ ...collection, folders: collection.folders?.map(folder => folder.id === id ? { ...folder, name } : folder) }, id, folderParentId || undefined)
+        : { ...collection, folders: [...(collection.folders || []), { id: crypto.randomUUID(), name, parentId: folderParentId || undefined }] };
+      if (!isFolderTree(updated.folders || [])) throw new Error('Folders are limited to 1000 per collection and 20 levels. Choose a valid parent.');
+      setWorkspace(current => ({ ...current, collections: current.collections.map(item => item.id === collectionId ? updated : item) })); setModal(null);
+    } catch (error) { setDialogError((error as Error).message); }
+  }
+  function openRunner(collectionId: string, folderId = '') {
+    if (busyId || controller.current) { setToast('Finish or cancel the current request before running a collection.'); return; }
+    setRunnerFolderId(folderId); setRunnerCollectionId(collectionId);
+  }
+  function exportSelectedFolder(collection: Collection, folderId: string) {
+    const folder = collection.folders?.find(item => item.id === folderId);
+    if (!folder) return;
+    download(`reqora-folder-${folder.name.replace(/[^\p{L}\p{N}_-]+/gu, '-').slice(0, 60)}.json`, JSON.stringify({ ...exportFolder(workspace, collection.id, folderId), workspaceName: folderPath(collection, folderId) }, null, 2), 'application/json');
+    setToast('Folder exported with its descendants, variables, and saved examples.');
   }
   function folderActions(collection: Collection, folderId: string): MenuAction[] {
-    const folders = collection.folders || [], index = folders.findIndex(item => item.id === folderId);
+    const folder = collection.folders?.find(item => item.id === folderId), folders = (collection.folders || []).filter(item => item.parentId === folder?.parentId), index = folders.findIndex(item => item.id === folderId);
+    const subtree = folderSubtree(collection, folderId), hasRequests = workspace.saved.some(item => item.collectionId === collection.id && !!item.folderId && subtree.has(item.folderId));
     return [
-      { label: 'Rename folder', icon: 'edit', onSelect: () => openFolder(collection.id, folderId) },
+      { label: 'New subfolder', icon: 'folder', onSelect: () => openFolder(collection.id, undefined, folderId) },
+      { label: 'Rename or move folder', icon: 'edit', onSelect: () => openFolder(collection.id, folderId) },
+      { label: 'Run folder', icon: 'send', disabled: !hasRequests || !!busyId, onSelect: () => openRunner(collection.id, folderId) },
+      { label: 'Duplicate folder', icon: 'copy', onSelect: () => { try { setWorkspace(duplicateFolder(workspace, collection.id, folderId)); setToast('Folder and its contents duplicated.'); } catch (error) { setToast((error as Error).message); } } },
+      { label: 'Export folder', icon: 'download', onSelect: () => exportSelectedFolder(collection, folderId) },
       { label: 'Move folder up', icon: 'arrow', disabled: index <= 0, onSelect: () => setWorkspace(current => ({ ...current, collections: current.collections.map(item => item.id === collection.id ? shiftFolder(item, folderId, -1) : item) })) },
       { label: 'Move folder down', icon: 'arrow', disabled: index >= folders.length - 1, onSelect: () => setWorkspace(current => ({ ...current, collections: current.collections.map(item => item.id === collection.id ? shiftFolder(item, folderId, 1) : item) })) },
-      { label: 'Delete folder', icon: 'trash', danger: true, separator: true, onSelect: () => setConfirmation({ title: 'Delete folder?', description: 'Requests in this folder will move to the collection root.', confirmLabel: 'Delete folder', onConfirm: () => setWorkspace(current => ({ ...current, collections: current.collections.map(item => item.id === collection.id ? { ...item, folders: (item.folders || []).filter(folder => folder.id !== folderId) } : item), saved: current.saved.map(item => item.collectionId === collection.id && item.folderId === folderId ? { ...item, folderId: undefined } : item) })) }) },
+      { label: 'Delete folder', icon: 'trash', danger: true, separator: true, onSelect: () => setConfirmation({ title: 'Delete folder?', description: 'Requests and immediate child folders move to the parent folder, or to the collection root. No requests are deleted.', confirmLabel: 'Delete folder', onConfirm: () => setWorkspace(current => deleteFolder(current, collection.id, folderId)) }) },
     ];
   }
   function dropRequest(event: React.DragEvent, collectionId: string, folderId?: string, beforeId?: string) {
     event.preventDefault(); event.stopPropagation();
     const id = event.dataTransfer.getData('text/reqora-request');
-    if (!workspace.saved.some(item => item.request.id === id && item.collectionId === collectionId)) return;
-    setWorkspace(current => moveSaved(current, id, folderId, beforeId));
+    if (!workspace.saved.some(item => item.request.id === id)) return;
+    if (busyId === id) { setToast('Finish or cancel this request before moving it.'); return; }
+    setWorkspace(current => moveSaved(current, id, folderId, beforeId, collectionId));
+    setTabs(current => current.map(tab => tab.id === id ? { ...tab, collectionId } : tab));
+  }
+
+  function useExampleAsMock(example: ResponseExample) {
+    try {
+      updateDraft({ mock: { ...(draft.mock || defaultMock()), ...mockFromExample(example), enabled: true, activeScenarioId: undefined } });
+      setEditorTab('Mock'); setToast('Example copied to the default mock response. Save the request to keep it.');
+    } catch (error) { setToast((error as Error).message); }
   }
   function saveExample() {
     if (!response || !saved || !exampleName.trim()) return;
@@ -345,10 +377,10 @@ export default function App() {
         openRequest(clone);
         setToast('Request duplicated.');
       } },
-      { label: 'Organize in folder', icon: 'folder', onSelect: () => { setOrganizeRequestId(request.id); setOrganizeFolderId(workspace.saved.find(item => item.request.id === request.id)?.folderId || ''); setModal('organize'); } },
+      { label: 'Organize in folder', icon: 'folder', disabled: busyId === request.id, onSelect: () => { setOrganizeRequestId(request.id); setOrganizeFolderId(workspace.saved.find(item => item.request.id === request.id)?.folderId || ''); setModal('organize'); } },
       { label: 'Move up', icon: 'arrow', onSelect: () => setWorkspace(current => shiftSaved(current, request.id, -1)) },
       { label: 'Move down', icon: 'arrow', onSelect: () => setWorkspace(current => shiftSaved(current, request.id, 1)) },
-      { label: 'Move to collection', icon: 'move', disabled: workspace.collections.length < 2, onSelect: () => {
+      { label: 'Move to collection', icon: 'move', disabled: workspace.collections.length < 2 || busyId === request.id, onSelect: () => {
         setActionTarget({ kind: 'request', id: request.id });
         setMoveCollectionId(collection.id);
         setModal('move');
@@ -371,7 +403,7 @@ export default function App() {
       { label: 'Collection variables', icon: 'globe', onSelect: () => openCollection(collection.id, 'variables') },
       { label: 'Collection authentication', icon: 'lock', onSelect: () => openCollection(collection.id, 'auth') },
       { label: 'Collection scripts', icon: 'code', onSelect: () => openCollection(collection.id, 'scripts') },
-      { label: 'Run collection', icon: 'send', disabled: !requests.length || !!busyId, onSelect: () => setRunnerCollectionId(collection.id) },
+      { label: 'Run collection', icon: 'send', disabled: !requests.length || !!busyId, onSelect: () => openRunner(collection.id) },
       { label: 'New request', icon: 'plus', onSelect: () => createCollectionRequest(collection.id), separator: true },
       { label: 'New folder', icon: 'folder', onSelect: () => openFolder(collection.id) },
       { label: 'Move collection up', icon: 'arrow', disabled: workspace.collections[0]?.id === collection.id, onSelect: () => setWorkspace(current => shiftCollection(current, collection.id, -1)) },
@@ -380,7 +412,7 @@ export default function App() {
       { label: 'Duplicate collection', icon: 'copy', onSelect: () => {
         const id = crypto.randomUUID();
         const folderIds = new Map((collection.folders || []).map(folder => [folder.id, crypto.randomUUID()]));
-        const copiedCollection = { ...collection, id, name: `${collection.name} copy`, variables: collection.variables.map(row => ({ ...row, id: crypto.randomUUID() })), folders: (collection.folders || []).map(folder => ({ ...folder, id: folderIds.get(folder.id)! })) };
+        const copiedCollection = { ...collection, id, name: `${collection.name} copy`, variables: collection.variables.map(row => ({ ...row, id: crypto.randomUUID() })), folders: (collection.folders || []).map(folder => ({ ...folder, id: folderIds.get(folder.id)!, parentId: folder.parentId ? folderIds.get(folder.parentId) : undefined })) };
         const copiedRequests = requests.map(item => ({ ...item, collectionId: id, folderId: item.folderId ? folderIds.get(item.folderId) : undefined, examples: item.examples?.map(example => ({ ...example, id: crypto.randomUUID() })), request: { ...duplicateRequest(item.request), collectionId: id } }));
         setWorkspace(current => ({ ...current, collections: [...current.collections, copiedCollection], saved: [...current.saved, ...copiedRequests] }));
         setToast('Collection duplicated.');
@@ -601,7 +633,7 @@ export default function App() {
       <div className="sidebar-content">
         {sidebarTab === 'collections' ? <>
           {workspace.collections.map(item => {
-            const matching = (saved: SavedRequest) => `${saved.request.name} ${saved.request.url} ${saved.request.method}`.toLowerCase().includes(search.toLowerCase());
+            const matching = (saved: SavedRequest) => `${saved.request.name} ${saved.request.url} ${saved.request.method} ${saved.folderId ? folderPath(item, saved.folderId) : ''} ${item.name}`.toLowerCase().includes(search.toLowerCase());
             const requests = orderedSaved(workspace, item.id).filter(matching);
             const folders = item.folders || [];
             const validFolders = new Set(folders.map(folder => folder.id));
@@ -611,13 +643,10 @@ export default function App() {
               <ActionMenu label={`Options for request ${request.name}`} actions={requestActions(request, item)} />
             </div>;
             return <section className="collection-group" key={item.id}>
-              <div className={`collection-row ${activeOverview?.id === item.id ? 'overview-selected' : ''}`} draggable onDragStart={event => event.dataTransfer.setData('text/reqora-collection', item.id)} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); const source = event.dataTransfer.getData('text/reqora-collection'); if (source) setWorkspace(current => moveCollectionBefore(current, source, item.id)); }}><button className="icon-button collection-toggle" aria-label={`${collapsed.includes(item.id) ? 'Expand' : 'Collapse'} ${item.name}`} onClick={() => setCollapsed(current => current.includes(item.id) ? current.filter(id => id !== item.id) : [...current, item.id])} aria-expanded={!collapsed.includes(item.id)}><Icon name="chevron" size={12} className={!collapsed.includes(item.id) ? 'expanded' : ''} /></button><button className="collection-heading" onClick={() => openCollection(item.id)} title={`Open ${item.name} overview`}><Icon name="folder" size={17} /><span>{item.name}</span><small>{requests.length}</small></button><ActionMenu label={`Options for collection ${item.name}`} actions={collectionActions(item)} /></div>
-              {!collapsed.includes(item.id) && <div className="collection-requests"><div className="collection-root-drop" onDragOver={event => event.preventDefault()} onDrop={event => dropRequest(event, item.id)}>Collection root</div>{rootRequests.map(row)}
-                {folders.filter(folder => !search || folder.name.toLowerCase().includes(search.toLowerCase()) || requests.some(saved => saved.folderId === folder.id)).map(folder => <div className="sidebar-folder" key={folder.id}>
-                  <div className="sidebar-folder-heading" draggable onDragStart={event => { event.stopPropagation(); event.dataTransfer.setData('text/reqora-folder', folder.id); }} onDragOver={event => event.preventDefault()} onDrop={event => { const source = event.dataTransfer.getData('text/reqora-folder'); if (source) { event.preventDefault(); event.stopPropagation(); setWorkspace(current => ({ ...current, collections: current.collections.map(group => group.id === item.id ? moveFolderBefore(group, source, folder.id) : group) })); } else dropRequest(event, item.id, folder.id); }}><button className="icon-button" aria-label={`${collapsedFolders.includes(folder.id) ? 'Expand' : 'Collapse'} ${folder.name}`} onClick={() => setCollapsedFolders(current => current.includes(folder.id) ? current.filter(id => id !== folder.id) : [...current, folder.id])}><Icon name="chevron" size={11} className={!collapsedFolders.includes(folder.id) ? 'expanded' : ''} /></button><button className="folder-name" onClick={() => setCollapsedFolders(current => current.includes(folder.id) ? current.filter(id => id !== folder.id) : [...current, folder.id])}><Icon name="folder" size={14} />{folder.name}<small>{requests.filter(saved => saved.folderId === folder.id).length}</small></button><ActionMenu label={`Options for folder ${folder.name}`} actions={folderActions(item, folder.id)} /></div>
-                  {!collapsedFolders.includes(folder.id) && <div className="folder-requests">{requests.filter(saved => saved.folderId === folder.id).map(row)}</div>}
-                </div>)}
-                {!requests.length && !folders.length && <span className="collection-empty">{search ? 'No matching requests' : 'No saved requests yet'}</span>}
+              <div className={`collection-row ${activeOverview?.id === item.id ? 'overview-selected' : ''}`} draggable onDragStart={event => event.dataTransfer.setData('text/reqora-collection', item.id)} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); const source = event.dataTransfer.getData('text/reqora-collection'); if (source) setWorkspace(current => moveCollectionBefore(current, source, item.id)); }}><button className="icon-button collection-toggle" aria-label={`${collapsed.includes(item.id) ? 'Expand' : 'Collapse'} ${item.name}`} onClick={() => setCollapsed(current => current.includes(item.id) ? current.filter(id => id !== item.id) : [...current, item.id])} aria-expanded={!collapsed.includes(item.id) || !!search}><Icon name="chevron" size={12} className={!collapsed.includes(item.id) ? 'expanded' : ''} /></button><button className="collection-heading" onClick={() => openCollection(item.id)} title={`Open ${item.name} overview`}><Icon name="folder" size={17} /><span>{item.name}</span><small>{requests.length}</small></button><ActionMenu label={`Options for collection ${item.name}`} actions={collectionActions(item)} /></div>
+              {(!collapsed.includes(item.id) || !!search) && <div className="collection-requests"><div className="collection-root-drop" onDragOver={event => event.preventDefault()} onDrop={event => dropRequest(event, item.id)}>Collection root</div>{rootRequests.map(row)}
+                <FolderTree collection={item} requests={requests} search={search} collapsed={collapsedFolders.filter(value => value.startsWith(item.id + ':')).map(value => value.slice(item.id.length + 1))} row={row} actions={id => folderActions(item, id)} onToggle={id => { const key = item.id + ':' + id; setCollapsedFolders(current => current.includes(key) ? current.filter(value => value !== key) : [...current, key]); }} onDropRequest={(event, id) => dropRequest(event, item.id, id)} onReorder={(source, before) => setWorkspace(current => ({ ...current, collections: current.collections.map(group => group.id === item.id ? moveFolderBefore(group, source, before) : group) }))} />
+                {!requests.length && (!folders.length || !!search && !folders.some(folder => folderPath(item, folder.id).toLowerCase().includes(search.toLowerCase()))) && <span className="collection-empty">{search ? 'No matching requests' : 'No saved requests yet'}</span>}
               </div>}
             </section>;
           })}
@@ -642,7 +671,7 @@ export default function App() {
         <button className="icon-button new-tab" aria-label="New request" title="New request" onClick={addRequest}><Icon name="plus" size={18} /></button>
       </div>}
 
-      {activeOverview ? <CollectionOverview key={activeOverview.id} collection={activeOverview} requests={orderedSaved(workspace, activeOverview.id).map(item => item.request)} folderName={requestId => { const folderId = workspace.saved.find(item => item.request.id === requestId)?.folderId; return activeOverview.folders?.find(folder => folder.id === folderId)?.name; }} globals={workspaceGlobals(workspace)} section={collectionSection} onSectionChange={setCollectionSection} onChange={changes => setWorkspace(current => ({ ...current, collections: current.collections.map(item => item.id === activeOverview.id ? { ...item, ...changes } : item) }))} onOpenRequest={openRequest} onNewRequest={() => createCollectionRequest(activeOverview.id)} onGlobals={() => setModal('environment')} onRun={() => { if (busyId) setToast('Cancel the current request before running a collection.'); else setRunnerCollectionId(activeOverview.id); }} actions={collectionActions(activeOverview)} requestActions={request => requestActions(request, activeOverview)} /> : hasRequest ? <div className="request-workspace">
+      {activeOverview ? <CollectionOverview key={activeOverview.id} collection={activeOverview} requests={orderedSaved(workspace, activeOverview.id).map(item => item.request)} folderName={requestId => { const folderId = workspace.saved.find(item => item.request.id === requestId)?.folderId; return folderId ? folderPath(activeOverview, folderId) : undefined; }} globals={workspaceGlobals(workspace)} section={collectionSection} onSectionChange={setCollectionSection} onChange={changes => setWorkspace(current => ({ ...current, collections: current.collections.map(item => item.id === activeOverview.id ? { ...item, ...changes } : item) }))} onOpenRequest={openRequest} onNewRequest={() => createCollectionRequest(activeOverview.id)} onGlobals={() => setModal('environment')} onRun={() => { if (busyId) setToast('Cancel the current request before running a collection.'); else openRunner(activeOverview.id); }} actions={collectionActions(activeOverview)} requestActions={request => requestActions(request, activeOverview)} /> : hasRequest ? <div className="request-workspace">
         <div className="request-heading"><div className="request-location"><Icon name="folder" size={16} /><button className="request-collection-link" disabled={!collection} onClick={() => collection && openCollection(collection.id)}>{collection?.name || 'Scratchpad'}</button><Icon name="chevron" size={12} /><input aria-label="Request name" value={draft.name} onChange={event => updateDraft({ name: event.target.value })} /></div><div className="request-actions"><button className="text-button code-button" title="Generate cURL command" onClick={() => setModal('curl')}><Icon name="code" size={16} /> Code</button><button className="button button-secondary save-button" onClick={saveRequest}><Icon name="save" size={15} /> Save{dirty && <span className="unsaved-dot" />}</button></div></div>
         <form className="url-bar" onSubmit={event => { event.preventDefault(); void sendRequest(); }}>
           <div className="url-input-group"><select className={`method-select method-${draft.method.toLowerCase()}`} aria-label="HTTP method" value={draft.method} onChange={event => updateDraft({ method: event.target.value })}>{METHODS.map(method => <option key={method}>{method}</option>)}</select><div className="url-divider" /><input className="url-input" aria-label="Request URL" placeholder="Enter a URL or paste an endpoint" value={draft.url} onChange={event => updateDraft({ url: event.target.value })} spellCheck={false} autoComplete="off" /><span className="url-protocol"><Icon name="lock" size={14} /></span></div>
@@ -660,15 +689,15 @@ export default function App() {
             {editorTab === 'Body' && <BodyEditor key={draft.id} draft={draft} onChange={updateDraft} />}
             {editorTab === 'Scripts' && <ScriptEditor value={draft} onChange={updateDraft} />}
             {editorTab === 'Tests' && <ChecksEditor value={draft} onChange={updateDraft} />}
-            {editorTab === 'Examples' && <div className="request-examples"><div className="panel-label">Saved response examples <span>{saved?.examples?.length || 0}</span></div>{!saved && <p>Save this request to add examples.</p>}{saved && !(saved.examples || []).length && <p>Send this request and save its response as an example.</p>}{(saved?.examples || []).map(example => <details key={example.id}><summary><strong>{example.name}</strong><span>{example.status} {example.statusText}</span></summary><div className="example-actions"><button className="text-button" onClick={() => void copy(example.body)}>Copy body</button><button className="text-button" onClick={() => setConfirmation({ title: 'Delete example?', description: `“${example.name}” will be removed from this request.`, confirmLabel: 'Delete example', onConfirm: () => setWorkspace(current => ({ ...current, saved: current.saved.map(item => item.request.id === draft.id ? { ...item, examples: item.examples?.filter(savedExample => savedExample.id !== example.id) } : item) })) })}>Delete</button></div><div className="example-headers">{example.headers.map((header, index) => <div key={index}><strong>{header.name}</strong><span>{header.value}</span></div>)}</div>{example.truncated && <p>Saved example body is limited to 150,000 characters.</p>}<pre>{example.body}</pre></details>)}</div>}
+            {editorTab === 'Examples' && <div className="request-examples"><div className="panel-label">Saved response examples <span>{saved?.examples?.length || 0}</span></div>{!saved && <p>Save this request to add examples.</p>}{saved && !(saved.examples || []).length && <p>Send this request and save its response as an example.</p>}{(saved?.examples || []).map(example => <details key={example.id}><summary><strong>{example.name}</strong><span>{example.status} {example.statusText}</span></summary><div className="example-actions"><button className="text-button" disabled={example.truncated || example.body.length > 100_000} onClick={() => useExampleAsMock(example)}>Use as mock</button><button className="text-button" onClick={() => void copy(example.body)}>Copy body</button><button className="text-button" onClick={() => setConfirmation({ title: 'Delete example?', description: `“${example.name}” will be removed from this request.`, confirmLabel: 'Delete example', onConfirm: () => setWorkspace(current => ({ ...current, saved: current.saved.map(item => item.request.id === draft.id ? { ...item, examples: item.examples?.filter(savedExample => savedExample.id !== example.id) } : item) })) })}>Delete</button></div><div className="example-headers">{example.headers.map((header, index) => <div key={index}><strong>{header.name}</strong><span>{header.value}</span></div>)}</div>{example.truncated && <p>Saved example body is limited to 150,000 characters.</p>}<pre>{example.body}</pre></details>)}</div>}
             {editorTab === 'Schema' && <SchemaEditor draft={draft} onChange={updateDraft} />}
-            {editorTab === 'Mock' && <MockEditor draft={draft} onChange={updateDraft} />}
+            {editorTab === 'Mock' && <MockEditor key={draft.id} draft={draft} examples={saved?.examples} onChange={updateDraft} />}
             {editorTab === 'Auth' && <AuthEditor key={draft.id} value={draft} collectionAuth={collection?.auth} collectionName={collection?.name} variables={effectiveVariables} onChange={updateDraft} />}
             {editorTab === 'Settings' && <RequestSettings draft={draft} onChange={updateDraft} cookieCount={workspace.cookies.length} onOpenCookies={() => setModal('cookies')} />}
           </div>
         </div>
 
-        <section className="response-panel" aria-label="Response"><div className="response-heading"><div className="response-title"><Icon name="terminal" size={17} /><strong>Response</strong>{result?.mocked && <span className="mock-badge">MOCK</span>}{response && <span className={`response-status ${response.status < 400 ? 'status-success' : 'status-error'}`}>{response.status} {response.statusText}</span>}</div>{response ? <div className="response-metrics"><span><Icon name="history" size={13} />{response.durationMs} <small>ms</small></span><span><Icon name="file" size={13} />{formatSize(response.size)}</span>{saved && <button className="text-button" title="Save this response as an example" onClick={() => { setExampleName(`${response.status} ${response.statusText}`); setModal('example'); }}>Save example</button>}<button className="icon-button" title="Download response" aria-label="Download response" onClick={downloadResponse}><Icon name="download" size={16} /></button></div> : <span className="response-placeholder-label">{busyId === draft.id ? 'REQUEST IN PROGRESS' : 'READY WHEN YOU ARE'}</span>}</div>
+        <section className="response-panel" aria-label="Response"><div className="response-heading"><div className="response-title"><Icon name="terminal" size={17} /><strong>Response</strong>{result?.mocked && <span className="mock-badge" title={result.mockScenario || 'Default mock response'}>MOCK{result.mockScenario ? ' · ' + result.mockScenario : ''}</span>}{response && <span className={`response-status ${response.status < 400 ? 'status-success' : 'status-error'}`}>{response.status} {response.statusText}</span>}</div>{response ? <div className="response-metrics"><span><Icon name="history" size={13} />{response.durationMs} <small>ms</small></span><span><Icon name="file" size={13} />{formatSize(response.size)}</span>{saved && <button className="text-button" title="Save this response as an example" onClick={() => { setExampleName(`${response.status} ${response.statusText}`); setModal('example'); }}>Save example</button>}<button className="icon-button" title="Download response" aria-label="Download response" onClick={downloadResponse}><Icon name="download" size={16} /></button></div> : <span className="response-placeholder-label">{busyId === draft.id ? 'REQUEST IN PROGRESS' : 'READY WHEN YOU ARE'}</span>}</div>
           {busyId === draft.id ? <div className="response-empty" role="status"><div className="sending-orbit"><Icon name="send" size={28} /></div><h2>On its way.</h2><p>Waiting for your server to respond…</p><button className="text-button" onClick={() => controller.current?.abort()}>Cancel request</button></div> : result?.error && !response ? <div className="response-empty error-state" role="alert"><div className="empty-illustration"><Icon name="alert" size={28} /></div><h2>{result.error === 'Request cancelled.' ? 'Request cancelled' : 'Something needs a second look'}</h2><p>{result.error}</p><button className="button button-secondary" onClick={() => void sendRequest()}><Icon name="send" size={14} /> Try again</button>{!!result.tests?.length && <div className="response-validation-results"><AutomationResults tests={result.tests} logs={result.logs} /></div>}</div> : response ? <>
             <div className="response-toolbar"><nav aria-label="Response view">{(['Body', 'Tree', 'Preview', 'Compare', 'Headers', 'Cookies', 'Details', 'Tests'] as ResponseView[]).map(view => <button key={view} className={responseTab === view ? 'active' : ''} onClick={() => setResponseTab(view)}>{view}{view === 'Headers' ? ` ${response.headers.length}` : view === 'Cookies' ? ` ${responseCookies(response).length}` : view === 'Tests' ? ` ${result?.tests?.length || 0}` : ''}</button>)}</nav><div className="response-view-actions">{responseTab === 'Body' && response.encoding === 'utf8' && <><input className="response-search" aria-label="Search response body" placeholder="Find in body" value={responseSearch} onChange={event => setResponseSearch(event.target.value)} /><div className="segmented-control"><button className={pretty ? 'active' : ''} onClick={() => setPretty(true)}>Pretty</button><button className={!pretty ? 'active' : ''} onClick={() => setPretty(false)}>Raw</button></div></>}<button className="icon-button" title="Copy response view" aria-label="Copy response view" onClick={() => void copy(responseTab === 'Tests' ? JSON.stringify({ tests: result?.tests, logs: result?.logs, error: result?.error }, null, 2) : responseTab === 'Headers' ? response.headers.map(header => `${header.name}: ${header.value}`).join('\n') : responseTab === 'Cookies' ? responseCookies(response).join('\n') : responseTab === 'Details' ? `${result?.request?.method || draft.method} ${result?.request?.url || draft.url}\n${response.status} ${response.statusText}\n${response.url}\n${response.durationMs} ms` : response.body)}><Icon name="copy" size={15} /></button></div></div>
             <div className="response-content">{responseTab === 'Tests' ? <AutomationResults tests={result?.tests} logs={result?.logs} error={result?.error} /> : <ResponseInspector key={draft.id} response={response} view={responseTab} pretty={pretty} search={responseSearch} requestMethod={result?.request?.method || draft.method} requestUrl={result?.request?.url || draft.url} examples={saved?.examples} onDownload={downloadResponse} onCopy={text => void copy(text)} />}</div>
@@ -682,7 +711,7 @@ export default function App() {
       </footer>
     </main>
 
-    {runnerCollectionId && <CollectionRunner workspace={workspace} collectionId={runnerCollectionId} onClose={() => setRunnerCollectionId(null)} onWorkspaceChange={setWorkspace} onAuthenticationUpdate={updates => { setWorkspace(current => applyAuthenticationUpdates(current, updates)); updateTabAuthentication(updates); }} onCookieUpdate={cookies => setWorkspace(current => ({ ...current, cookies }))} />}
+    {runnerCollectionId && <CollectionRunner workspace={workspace} collectionId={runnerCollectionId} initialRequestIds={runnerFolderId ? orderedSaved(workspace, runnerCollectionId).filter(item => item.folderId && folderSubtree(workspace.collections.find(group => group.id === runnerCollectionId)!, runnerFolderId).has(item.folderId)).map(item => item.request.id) : undefined} folderLabel={runnerFolderId ? folderPath(workspace.collections.find(item => item.id === runnerCollectionId)!, runnerFolderId) : undefined} onClose={() => { setRunnerCollectionId(null); setRunnerFolderId(''); }} onWorkspaceChange={setWorkspace} onAuthenticationUpdate={updates => { setWorkspace(current => applyAuthenticationUpdates(current, updates)); updateTabAuthentication(updates); }} onCookieUpdate={cookies => setWorkspace(current => ({ ...current, cookies }))} />}
     {toast && <div className="toast" role="status"><Icon name="check" size={17} /><span>{toast}</span><button className="icon-button" aria-label="Dismiss notification" onClick={() => setToast('')}><Icon name="close" size={14} /></button></div>}
     {modal === 'workspaces' && <Modal title="Workspaces" wide onClose={() => setModal(null)}>
       <p className="modal-description">Each workspace has its own collections, environments, history, and cookies. Save request changes before switching. Exports include saved credentials and file metadata.</p>
@@ -696,11 +725,14 @@ export default function App() {
       <div className="modal-footer"><button className="button button-secondary" disabled={!workspaceDraftName.trim()} onClick={() => { setWorkspaceStore(current => ({ ...current, workspaces: current.workspaces.map(item => item.id === current.activeId ? { ...item, name: uniqueName(workspaceDraftName.trim(), current.workspaces.filter(other => other.id !== item.id).map(other => other.name)) } : item) })); setWorkspaceDraftName(''); }}>Rename active</button><button className="button button-primary" disabled={!workspaceDraftName.trim() || workspaceStore.workspaces.length >= 100 || !!busyId || !!runnerCollectionId} onClick={createWorkspace}>Create new workspace</button></div>
       {dialogError && <p className="dialog-error" role="alert">{dialogError}</p>}
     </Modal>}
-    {modal === 'folder' && <Modal title={folderTarget?.id ? 'Rename folder' : 'New folder'} onClose={() => setModal(null)}>
-      <form onSubmit={event => { event.preventDefault(); saveFolder(); }}><label className="field-label">Folder name<input className="field-input" value={folderName} onChange={event => setFolderName(event.target.value)} /></label>{dialogError && <p className="dialog-error" role="alert">{dialogError}</p>}<div className="modal-footer"><button type="button" className="button button-secondary" onClick={() => setModal(null)}>Cancel</button><button className="button button-primary" disabled={!folderName.trim()}>Save folder</button></div></form>
+    {modal === 'folder' && <Modal title={folderTarget?.id ? 'Edit folder' : 'New folder'} onClose={() => setModal(null)}>
+      <form onSubmit={event => { event.preventDefault(); saveFolder(); }}><label className="field-label">Folder name<input className="field-input" value={folderName} maxLength={200} onChange={event => setFolderName(event.target.value)} /></label>
+      <label className="field-label">Parent folder<select className="field-input" value={folderParentId} onChange={event => setFolderParentId(event.target.value)}><option value="">Collection root</option>{(() => { const group = workspace.collections.find(item => item.id === folderTarget?.collectionId); if (!group) return null; const excluded = folderTarget?.id ? folderSubtree(group, folderTarget.id) : new Set<string>(); return folderTree(group).filter(item => !excluded.has(item.folder.id)).map(item => <option key={item.folder.id} value={item.folder.id}>{item.path}</option>); })()}</select></label>
+      <p className="automation-help">Moving a folder keeps its requests and descendants together. Nesting is limited to 20 levels.</p>
+      {dialogError && <p className="dialog-error" role="alert">{dialogError}</p>}<div className="modal-footer"><button type="button" className="button button-secondary" onClick={() => setModal(null)}>Cancel</button><button className="button button-primary" disabled={!folderName.trim()}>Save folder</button></div></form>
     </Modal>}
     {modal === 'organize' && <Modal title="Organize request" onClose={() => setModal(null)}>
-      <label className="field-label">Folder<select className="field-input" value={organizeFolderId} onChange={event => setOrganizeFolderId(event.target.value)}><option value="">Collection root</option>{(workspace.collections.find(item => item.id === workspace.saved.find(saved => saved.request.id === organizeRequestId)?.collectionId)?.folders || []).map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
+      <label className="field-label">Folder<select className="field-input" value={organizeFolderId} onChange={event => setOrganizeFolderId(event.target.value)}><option value="">Collection root</option>{(() => { const group = workspace.collections.find(item => item.id === workspace.saved.find(saved => saved.request.id === organizeRequestId)?.collectionId); return group ? folderTree(group).map(item => <option key={item.folder.id} value={item.folder.id}>{item.path}</option>) : null; })()}</select></label>
       <div className="modal-footer"><button className="button button-secondary" onClick={() => setModal(null)}>Cancel</button><button className="button button-primary" onClick={() => { setWorkspace(current => moveSaved(current, organizeRequestId, organizeFolderId || undefined)); setModal(null); }}>Move request</button></div>
     </Modal>}
     {modal === 'example' && <Modal title="Save response example" onClose={() => setModal(null)}>
